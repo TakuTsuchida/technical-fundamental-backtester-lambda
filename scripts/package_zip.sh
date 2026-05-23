@@ -23,7 +23,9 @@ cp "${SRC_DIR}/handler.py" "${STAGING}/handler.py"
 cp -r "${REPO_ROOT}/src/shared/shared" "${STAGING}/shared"
 
 # Install function-specific deps (skip if group has no packages)
-DEPS=$(cd "${REPO_ROOT}" && uv export --only-group "${FUNC}" --no-hashes 2>/dev/null || true)
+# Filter index-URL lines (-i ...) and blank lines; DEPS is empty when group has no packages
+DEPS=$(cd "${REPO_ROOT}" && uv export --only-group "${FUNC}" --no-hashes 2>/dev/null \
+  | grep -Ev '^(-i |#|[[:space:]]*$)' || true)
 if [[ -n "${DEPS}" ]]; then
   echo "${DEPS}" | uv pip install --system --no-cache --target "${STAGING}" -r /dev/stdin
 fi
