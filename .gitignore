@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# uv / venv
+.venv/
+
+# Build artifacts
+dist/
+build/
+*.whl
+*.zip
+
+# mypy / ruff cache
+.mypy_cache/
+.ruff_cache/
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
