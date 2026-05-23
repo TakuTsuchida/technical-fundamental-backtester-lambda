@@ -1,0 +1,40 @@
+name: Deploy ZIP Lambdas
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/token_refresher/**"
+      - "src/dispatcher/**"
+      - "src/shared/**"
+      - "scripts/package_zip.sh"
+      - "Makefile"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-northeast-1
+
+      - name: Deploy token-refresher
+        run: make deploy-token-refresher
+
+      - name: Deploy dispatcher
+        run: make deploy-dispatcher
