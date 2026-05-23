@@ -40,8 +40,9 @@ module = ["pyarrow.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts   = "--tb=short -q"
+testpaths  = ["tests"]
+pythonpath = ["src"]
+addopts    = "--tb=short -q"
 
 [tool.uv]
 package = false
