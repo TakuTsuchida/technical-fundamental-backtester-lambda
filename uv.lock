@@ -925,6 +925,12 @@ wheels = [
 name = "shared"
 version = "0.1.0"
 source = { editable = "src/shared" }
+dependencies = [
+    { name = "requests" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "requests", specifier = ">=2.32" }]
 
 [[package]]
 name = "six"
@@ -952,8 +958,12 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+dispatcher = [
+    { name = "requests" },
+]
 worker = [
     { name = "pyarrow" },
+    { name = "requests" },
 ]
 
 [package.metadata]
@@ -968,9 +978,11 @@ dev = [
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "ruff", specifier = ">=0.5" },
 ]
-dispatcher = []
-token-refresher = []
-worker = [{ name = "pyarrow", specifier = ">=16.0" }]
+dispatcher = [{ name = "requests", specifier = ">=2.32" }]
+worker = [
+    { name = "pyarrow", specifier = ">=16.0" },
+    { name = "requests", specifier = ">=2.32" },
+]
 
 [[package]]
 name = "types-awscrt"
