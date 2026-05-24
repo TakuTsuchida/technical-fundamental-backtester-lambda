@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 from datetime import UTC, datetime
@@ -8,6 +7,7 @@ from typing import Any
 
 import boto3
 from shared.jquants import JQuantsClient
+from shared.s3_store import make_stock_list_key, put_json
 from shared.ssm import get_parameter
 
 logger = logging.getLogger(__name__)
@@ -28,14 +28,9 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     logger.info("fetched equities master", extra={"count": len(equities)})
 
     date_str = datetime.now(UTC).strftime("%Y-%m-%d")
-    s3_key = f"stock-list/{date_str}.json"
+    s3_key = make_stock_list_key(date_str)
     s3 = boto3.client("s3")
-    s3.put_object(
-        Bucket=s3_bucket,
-        Key=s3_key,
-        Body=json.dumps(equities, ensure_ascii=False),
-        ContentType="application/json",
-    )
+    put_json(s3, s3_bucket, s3_key, equities)
     logger.info("saved stock list", extra={"key": s3_key})
 
     codes = [e["Code"] for e in equities]
