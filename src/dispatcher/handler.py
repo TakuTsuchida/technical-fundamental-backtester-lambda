@@ -5,10 +5,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 import boto3
-from dispatcher.service import DispatcherDeps, DispatcherService
 from shared.jquants import JQuantsClient
 from shared.s3_store import S3Store
 from shared.ssm import get_parameter
+
+from dispatcher.service import DispatcherDeps, DispatcherService
 
 
 def _make_deps() -> DispatcherDeps:
