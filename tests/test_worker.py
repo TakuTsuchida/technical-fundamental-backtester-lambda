@@ -24,8 +24,28 @@ def _mock_jquants_response(bars: list[dict[str, Any]]) -> MagicMock:
     return mock
 
 
+def _mock_fins_response(summary: list[dict[str, Any]]) -> MagicMock:
+    mock = MagicMock()
+    mock.raise_for_status.return_value = None
+    mock.json.return_value = {"fins_summary": summary}
+    return mock
+
+
 def _make_sqs_records(codes: list[str]) -> dict[str, Any]:
     return {"Records": [{"body": code, "receiptHandle": f"rh-{code}"} for code in codes]}
+
+
+def _make_fins_sqs_records(codes: list[str]) -> dict[str, Any]:
+    return {
+        "Records": [
+            {
+                "body": code,
+                "receiptHandle": f"rh-{code}",
+                "messageAttributes": {"type": {"stringValue": "fins", "dataType": "String"}},
+            }
+            for code in codes
+        ]
+    }
 
 
 @pytest.fixture()
@@ -95,3 +115,33 @@ class TestHandlerSuccess:
 
         assert result["statusCode"] == 200
         assert result["saved"] == []
+
+
+class TestHandlerFinsSummary:
+    def test_saves_fins_summary_to_s3(self, aws_setup: dict[str, Any]) -> None:
+        summary = [{"DiscDate": "2026-02-06", "Sales": "256910000000"}]
+        mock_resp = _mock_fins_response(summary)
+
+        importlib.invalidate_caches()
+        from worker.handler import handler
+
+        with patch("shared.jquants.requests.get", return_value=mock_resp):
+            result = handler(_make_fins_sqs_records(["13010"]), object())
+
+        assert result["statusCode"] == 200
+        saved = result["saved"]
+        assert len(saved) == 1
+        body = aws_setup["s3"].get_object(Bucket=S3_BUCKET, Key=saved[0])["Body"].read()
+        assert json.loads(body) == summary
+
+    def test_fins_s3_key_format(self, aws_setup: dict[str, Any]) -> None:
+        mock_resp = _mock_fins_response([])
+
+        from worker.handler import handler
+
+        with patch("shared.jquants.requests.get", return_value=mock_resp):
+            result = handler(_make_fins_sqs_records(["72030"]), object())
+
+        key = result["saved"][0]
+        assert key.startswith("fins-summary/72030/")
+        assert key.endswith(".json")
