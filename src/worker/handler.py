@@ -13,8 +13,10 @@ from worker.service import WorkerDeps, WorkerService
 
 def _make_deps() -> WorkerDeps:
     api_key = get_parameter(os.environ["API_KEY_PARAM"])
+    client = JQuantsClient(api_key=api_key)
     return WorkerDeps(
-        jquants=JQuantsClient(api_key=api_key),
+        price_fetcher=client,
+        fins_fetcher=client,
         store=S3Store(boto3.client("s3"), os.environ["S3_BUCKET"]),
     )
 
