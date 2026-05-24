@@ -4,9 +4,9 @@ ECR_URI    ?=
 IMAGE_TAG  ?= $(shell git rev-parse --short HEAD)
 
 .PHONY: install lint format typecheck test \
-        build-dispatcher build-worker \
+        build-dispatcher build-fins-dispatcher build-worker \
         push-worker \
-        deploy-dispatcher deploy-worker
+        deploy-dispatcher deploy-fins-dispatcher deploy-worker
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
@@ -20,7 +20,7 @@ format:
 	uv run ruff format .
 
 typecheck:
-	uv run mypy --package shared --package dispatcher --package worker
+	uv run mypy --package shared --package dispatcher --package worker --package fins_dispatcher
 	uv run mypy tests/
 
 test:
@@ -30,6 +30,9 @@ test:
 
 build-dispatcher:
 	bash scripts/package_zip.sh dispatcher
+
+build-fins-dispatcher:
+	bash scripts/package_zip.sh fins_dispatcher
 
 build-worker:
 	@test -n "$(IMAGE_TAG)" || (echo "ERROR: IMAGE_TAG is empty" >&2; exit 1)
@@ -53,6 +56,12 @@ deploy-dispatcher: build-dispatcher
 	aws lambda update-function-code \
 		--function-name my-service-dispatcher \
 		--zip-file fileb://dist/dispatcher.zip \
+		--region $(AWS_REGION)
+
+deploy-fins-dispatcher: build-fins-dispatcher
+	aws lambda update-function-code \
+		--function-name my-service-fins-dispatcher \
+		--zip-file fileb://dist/fins_dispatcher.zip \
 		--region $(AWS_REGION)
 
 deploy-worker: build-worker push-worker
