@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from shared.jquants import JQuantsClient
+from shared.jquants import EquityLister
 from shared.s3_store import S3Store, make_stock_list_key
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ _SQS_BATCH_SIZE = 10
 
 @dataclass
 class DispatcherDeps:
-    jquants: JQuantsClient
+    jquants: EquityLister
     store: S3Store
     sqs: Any
     sqs_url: str
