@@ -21,7 +21,7 @@ def _make_equities(n: int) -> list[dict[str, Any]]:
 def _mock_jquants_response(equities: list[dict[str, Any]]) -> MagicMock:
     mock = MagicMock()
     mock.raise_for_status.return_value = None
-    mock.json.return_value = {"equities_master": equities}
+    mock.json.return_value = {"data": equities}
     return mock
 
 

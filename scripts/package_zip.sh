@@ -19,6 +19,9 @@ mkdir -p "${STAGING}"
 # Copy handler
 cp "${SRC_DIR}/handler.py" "${STAGING}/handler.py"
 
+# Copy function package for intra-package imports (e.g. from fins_dispatcher.service import ...)
+cp -r "${SRC_DIR}" "${STAGING}/${FUNC}"
+
 # Vendor shared package
 cp -r "${REPO_ROOT}/src/shared/shared" "${STAGING}/shared"
 

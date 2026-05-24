@@ -29,7 +29,7 @@ class JQuantsClient:
     def get_listed_info(self) -> list[dict[str, Any]]:
         resp = requests.get(f"{BASE_URL}/equities/master", headers=self._headers, timeout=30)
         resp.raise_for_status()
-        return resp.json()["equities_master"]  # type: ignore[no-any-return]
+        return resp.json()["data"]  # type: ignore[no-any-return]
 
     def get_prices_daily_quotes(self, code: str) -> list[dict[str, Any]]:
         resp = requests.get(
@@ -39,7 +39,7 @@ class JQuantsClient:
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json()["daily_bars"]  # type: ignore[no-any-return]
+        return resp.json()["data"]  # type: ignore[no-any-return]
 
     def get_fins_summary(self, code: str) -> list[dict[str, Any]]:
         resp = requests.get(
@@ -49,4 +49,4 @@ class JQuantsClient:
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json()["fins_summary"]  # type: ignore[no-any-return]
+        return resp.json()["data"]  # type: ignore[no-any-return]
