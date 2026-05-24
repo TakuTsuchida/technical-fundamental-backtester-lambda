@@ -2,7 +2,9 @@
 name = "shared"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "requests>=2.32",
+]
 
 [build-system]
 requires      = ["hatchling"]
