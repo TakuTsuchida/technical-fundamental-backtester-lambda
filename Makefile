@@ -4,9 +4,9 @@ ECR_URI    ?=
 IMAGE_TAG  ?= $(shell git rev-parse --short HEAD)
 
 .PHONY: install lint format typecheck test \
-        build-token-refresher build-dispatcher build-worker \
+        build-dispatcher build-worker \
         push-worker \
-        deploy-token-refresher deploy-dispatcher deploy-worker
+        deploy-dispatcher deploy-worker
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
@@ -20,15 +20,13 @@ format:
 	uv run ruff format .
 
 typecheck:
-	uv run mypy src/ tests/
+	uv run mypy --package shared --package dispatcher --package worker
+	uv run mypy tests/
 
 test:
 	uv run pytest
 
 # ── Build ─────────────────────────────────────────────────────────────────────
-
-build-token-refresher:
-	bash scripts/package_zip.sh token-refresher
 
 build-dispatcher:
 	bash scripts/package_zip.sh dispatcher
@@ -50,12 +48,6 @@ push-worker:
 	docker push $(ECR_URI):latest
 
 # ── Deploy ────────────────────────────────────────────────────────────────────
-
-deploy-token-refresher: build-token-refresher
-	aws lambda update-function-code \
-		--function-name my-service-token-refresher \
-		--zip-file fileb://dist/token-refresher.zip \
-		--region $(AWS_REGION)
 
 deploy-dispatcher: build-dispatcher
 	aws lambda update-function-code \
