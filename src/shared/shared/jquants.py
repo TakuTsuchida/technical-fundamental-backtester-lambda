@@ -1,10 +1,20 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import requests
 
 BASE_URL = "https://api.jquants.com/v2"
+
+
+@runtime_checkable
+class EquityLister(Protocol):
+    def get_listed_info(self) -> list[dict[str, Any]]: ...
+
+
+@runtime_checkable
+class PriceFetcher(Protocol):
+    def get_prices_daily_quotes(self, code: str) -> list[dict[str, Any]]: ...
 
 
 class JQuantsClient:
