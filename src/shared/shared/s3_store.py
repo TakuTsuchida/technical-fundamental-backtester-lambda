@@ -4,13 +4,18 @@ import json
 from typing import Any
 
 
-def put_json(s3: Any, bucket: str, key: str, data: Any) -> None:
-    s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=json.dumps(data, ensure_ascii=False),
-        ContentType="application/json",
-    )
+class S3Store:
+    def __init__(self, client: Any, bucket: str) -> None:
+        self._client = client
+        self._bucket = bucket
+
+    def put_json(self, key: str, data: Any) -> None:
+        self._client.put_object(
+            Bucket=self._bucket,
+            Key=key,
+            Body=json.dumps(data, ensure_ascii=False),
+            ContentType="application/json",
+        )
 
 
 def make_stock_list_key(date_str: str) -> str:
