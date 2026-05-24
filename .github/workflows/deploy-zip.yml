@@ -5,7 +5,6 @@ on:
     branches:
       - main
     paths:
-      - "src/token_refresher/**"
       - "src/dispatcher/**"
       - "src/shared/**"
       - "scripts/package_zip.sh"
@@ -33,9 +32,6 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ZIP_ROLE_ARN }}
           aws-region: ap-northeast-1
-
-      - name: Deploy token-refresher
-        run: make deploy-token-refresher
 
       - name: Deploy dispatcher
         run: make deploy-dispatcher
