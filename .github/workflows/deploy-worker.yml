@@ -8,6 +8,7 @@ on:
       - "src/worker/**"
       - "src/shared/**"
       - "Makefile"
+  workflow_dispatch: # OIDC verification — remove after confirmed
 
 permissions:
   id-token: write
