@@ -18,9 +18,12 @@ dev = [
 dispatcher = [
     "requests>=2.32",
 ]
-worker     = [
+worker          = [
     "requests>=2.32",
     "pyarrow>=16.0",
+]
+fins_dispatcher = [
+    "requests>=2.32",
 ]
 
 [tool.ruff]
