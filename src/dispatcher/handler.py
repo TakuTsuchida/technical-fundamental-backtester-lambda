@@ -42,7 +42,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
     sqs = boto3.client("sqs")
     for i in range(0, len(codes), _SQS_BATCH_SIZE):
         batch = codes[i : i + _SQS_BATCH_SIZE]
-        entries = [{"Id": str(j), "MessageBody": code} for j, code in enumerate(batch)]
+        entries: list[Any] = [{"Id": str(j), "MessageBody": code} for j, code in enumerate(batch)]
         sqs.send_message_batch(QueueUrl=sqs_url, Entries=entries)
 
     logger.info("enqueued codes", extra={"count": len(codes)})
