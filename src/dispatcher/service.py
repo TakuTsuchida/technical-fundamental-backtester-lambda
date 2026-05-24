@@ -35,7 +35,9 @@ class DispatcherService:
         codes = [e["Code"] for e in equities]
         for i in range(0, len(codes), _SQS_BATCH_SIZE):
             batch = codes[i : i + _SQS_BATCH_SIZE]
-            entries: list[Any] = [{"Id": str(j), "MessageBody": code} for j, code in enumerate(batch)]
+            entries: list[Any] = [
+                {"Id": str(j), "MessageBody": code} for j, code in enumerate(batch)
+            ]
             self._deps.sqs.send_message_batch(QueueUrl=self._deps.sqs_url, Entries=entries)
 
         logger.info("enqueued codes", extra={"count": len(codes)})
