@@ -4,7 +4,13 @@ import json
 import re
 from unittest.mock import MagicMock
 
-from shared.s3_store import S3Store, make_daily_prices_key, make_stock_list_key, today_jst
+from shared.s3_store import (
+    S3Store,
+    make_daily_prices_key,
+    make_fins_summary_key,
+    make_stock_list_key,
+    today_jst,
+)
 
 
 class TestS3Store:
@@ -54,3 +60,9 @@ class TestKeyBuilders:
 
     def test_make_daily_prices_key_different_code(self) -> None:
         assert make_daily_prices_key("72030", "2026-01-01") == "daily-prices/72030/2026-01-01.json"
+
+    def test_make_fins_summary_key(self) -> None:
+        assert make_fins_summary_key("13010", "2026-05-24") == "fins-summary/13010/2026-05-24.json"
+
+    def test_make_fins_summary_key_different_code(self) -> None:
+        assert make_fins_summary_key("72030", "2026-01-01") == "fins-summary/72030/2026-01-01.json"
