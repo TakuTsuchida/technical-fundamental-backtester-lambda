@@ -33,7 +33,7 @@ class TestJQuantsClientInit:
 class TestGetListedInfo:
     def test_returns_equities_master(self, client: JQuantsClient) -> None:
         equities = [{"Code": "13010", "CompanyName": "テスト株式会社"}]
-        mock_resp = _mock_response({"equities_master": equities})
+        mock_resp = _mock_response({"data": equities})
 
         with patch("shared.jquants.requests.get", return_value=mock_resp) as mock_get:
             result = client.get_listed_info()
@@ -58,7 +58,7 @@ class TestGetListedInfo:
 class TestGetPricesDailyQuotes:
     def test_returns_daily_bars(self, client: JQuantsClient) -> None:
         bars = [{"Code": "13010", "Date": "2024-01-01", "Close": 1000.0}]
-        mock_resp = _mock_response({"daily_bars": bars})
+        mock_resp = _mock_response({"data": bars})
 
         with patch("shared.jquants.requests.get", return_value=mock_resp) as mock_get:
             result = client.get_prices_daily_quotes("13010")
@@ -84,7 +84,7 @@ class TestGetPricesDailyQuotes:
 class TestGetFinsSummary:
     def test_returns_fins_summary(self, client: JQuantsClient) -> None:
         summary = [{"DiscDate": "2026-02-06", "Sales": "256910000000"}]
-        mock_resp = _mock_response({"fins_summary": summary})
+        mock_resp = _mock_response({"data": summary})
 
         with patch("shared.jquants.requests.get", return_value=mock_resp) as mock_get:
             result = client.get_fins_summary("13010")
