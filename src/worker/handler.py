@@ -26,7 +26,7 @@ def _poll_sqs(date_str: str) -> dict[str, Any]:
     sqs_url = os.environ["SQS_URL"]
     response = sqs.receive_message(
         QueueUrl=sqs_url,
-        MaxNumberOfMessages=5,
+        MaxNumberOfMessages=1,
         MessageAttributeNames=["All"],
     )
     messages = response.get("Messages", [])
