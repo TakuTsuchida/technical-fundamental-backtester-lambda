@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
 from typing import Any
 
 import boto3
 from shared.jquants import JQuantsClient
-from shared.s3_store import S3Store
+from shared.s3_store import S3Store, today_jst
 from shared.ssm import get_parameter
 
 from dispatcher.service import DispatcherDeps, DispatcherService
@@ -23,5 +22,5 @@ def _make_deps() -> DispatcherDeps:
 
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
-    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+    date_str = today_jst()
     return DispatcherService(_make_deps()).run(date_str)
