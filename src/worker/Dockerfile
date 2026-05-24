@@ -18,6 +18,7 @@ RUN dnf install -y shadow-utils && \
     dnf clean all
 
 COPY --from=builder --chown=lambda-user:lambda-user /build/deps ${LAMBDA_TASK_ROOT}/
+COPY --chown=lambda-user:lambda-user src/worker/ ${LAMBDA_TASK_ROOT}/worker/
 COPY --chown=lambda-user:lambda-user src/worker/handler.py ${LAMBDA_TASK_ROOT}/handler.py
 
 USER lambda-user
