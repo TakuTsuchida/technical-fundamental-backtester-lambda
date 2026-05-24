@@ -79,3 +79,29 @@ class TestGetPricesDailyQuotes:
             pytest.raises(requests.HTTPError),
         ):
             client.get_prices_daily_quotes("13010")
+
+
+class TestGetFinsSummary:
+    def test_returns_fins_summary(self, client: JQuantsClient) -> None:
+        summary = [{"DiscDate": "2026-02-06", "Sales": "256910000000"}]
+        mock_resp = _mock_response({"fins_summary": summary})
+
+        with patch("shared.jquants.requests.get", return_value=mock_resp) as mock_get:
+            result = client.get_fins_summary("13010")
+
+        mock_get.assert_called_once_with(
+            "https://api.jquants.com/v2/fins/summary",
+            headers={"x-api-key": "test-api-key"},
+            params={"code": "13010"},
+            timeout=30,
+        )
+        assert result == summary
+
+    def test_raises_on_http_error(self, client: JQuantsClient) -> None:
+        mock_resp = _mock_response({}, status_code=403)
+
+        with (
+            patch("shared.jquants.requests.get", return_value=mock_resp),
+            pytest.raises(requests.HTTPError),
+        ):
+            client.get_fins_summary("13010")
