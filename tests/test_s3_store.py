@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from unittest.mock import MagicMock
 
-from shared.s3_store import S3Store, make_daily_prices_key, make_stock_list_key
+from shared.s3_store import S3Store, make_daily_prices_key, make_stock_list_key, today_jst
 
 
 class TestS3Store:
@@ -34,6 +35,14 @@ class TestS3Store:
         body = mock_client.put_object.call_args.kwargs["Body"]
         assert "日本語" in body
         assert "\\u" not in body
+
+
+class TestTodayJst:
+    def test_returns_yyyy_mm_dd_format(self) -> None:
+        assert re.match(r"^\d{4}-\d{2}-\d{2}$", today_jst())
+
+    def test_returns_string(self) -> None:
+        assert isinstance(today_jst(), str)
 
 
 class TestKeyBuilders:
