@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from shared.jquants import JQuantsClient
+from shared.jquants import PriceFetcher
 from shared.s3_store import S3Store, make_daily_prices_key
 
 logger = logging.getLogger(__name__)
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class WorkerDeps:
-    jquants: JQuantsClient
+    jquants: PriceFetcher
     store: S3Store
 
 
