@@ -28,5 +28,7 @@ class WorkerService:
             s3_key = make_daily_prices_key(code, date_str)
             self._deps.store.put_json(s3_key, bars)
             saved.append(s3_key)
-            logger.info("saved daily prices", extra={"code": code, "key": s3_key, "count": len(bars)})
+            logger.info(
+                "saved daily prices", extra={"code": code, "key": s3_key, "count": len(bars)}
+            )
         return saved
