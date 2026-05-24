@@ -4,7 +4,13 @@ import json
 import re
 from unittest.mock import MagicMock
 
-from shared.s3_store import S3Store, make_daily_prices_key, make_fins_summary_key, make_stock_list_key, today_jst
+from shared.s3_store import (
+    S3Store,
+    make_daily_prices_key,
+    make_fins_summary_key,
+    make_stock_list_key,
+    today_jst,
+)
 
 
 class TestS3Store:
