@@ -32,3 +32,7 @@ def make_stock_list_key(date_str: str) -> str:
 
 def make_daily_prices_key(code: str, date_str: str) -> str:
     return f"daily-prices/{code}/{date_str}.json"
+
+
+def make_fins_summary_key(code: str, date_str: str) -> str:
+    return f"fins-summary/{code}/{date_str}.json"
