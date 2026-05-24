@@ -1,34 +1,39 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
-from shared.s3_store import make_daily_prices_key, make_stock_list_key, put_json
+from shared.s3_store import S3Store, make_daily_prices_key, make_stock_list_key
 
 
-class TestPutJson:
-    def test_calls_put_object_with_json_body(self) -> None:
-        mock_s3 = MagicMock()
+class TestS3Store:
+    def test_put_json_calls_put_object_with_correct_args(self) -> None:
+        mock_client = MagicMock()
         data = [{"Code": "1301", "Name": "Test"}]
-        put_json(mock_s3, "my-bucket", "stock-list/2026-05-24.json", data)
-        mock_s3.put_object.assert_called_once_with(
+        S3Store(mock_client, "my-bucket").put_json("stock-list/2026-05-24.json", data)
+        mock_client.put_object.assert_called_once_with(
             Bucket="my-bucket",
             Key="stock-list/2026-05-24.json",
-            Body='[{"Code": "1301", "Name": "Test"}]',
+            Body=json.dumps(data, ensure_ascii=False),
             ContentType="application/json",
         )
 
-    def test_sets_content_type_application_json(self) -> None:
-        mock_s3 = MagicMock()
-        put_json(mock_s3, "b", "k.json", {})
-        _, kwargs = mock_s3.put_object.call_args
-        assert kwargs["ContentType"] == "application/json"
+    def test_put_json_uses_stored_bucket(self) -> None:
+        mock_client = MagicMock()
+        S3Store(mock_client, "specific-bucket").put_json("k.json", {})
+        assert mock_client.put_object.call_args.kwargs["Bucket"] == "specific-bucket"
 
-    def test_serializes_non_ascii_without_escaping(self) -> None:
-        mock_s3 = MagicMock()
-        put_json(mock_s3, "b", "k.json", {"name": "日本語"})
-        _, kwargs = mock_s3.put_object.call_args
-        assert "日本語" in kwargs["Body"]
-        assert "\\u" not in kwargs["Body"]
+    def test_put_json_sets_content_type_application_json(self) -> None:
+        mock_client = MagicMock()
+        S3Store(mock_client, "b").put_json("k.json", {})
+        assert mock_client.put_object.call_args.kwargs["ContentType"] == "application/json"
+
+    def test_put_json_serializes_non_ascii_without_escaping(self) -> None:
+        mock_client = MagicMock()
+        S3Store(mock_client, "b").put_json("k.json", {"name": "日本語"})
+        body = mock_client.put_object.call_args.kwargs["Body"]
+        assert "日本語" in body
+        assert "\\u" not in body
 
 
 class TestKeyBuilders:
