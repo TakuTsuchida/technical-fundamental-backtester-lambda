@@ -20,14 +20,14 @@ def _make_bars(n: int) -> list[dict[str, Any]]:
 def _mock_jquants_response(bars: list[dict[str, Any]]) -> MagicMock:
     mock = MagicMock()
     mock.raise_for_status.return_value = None
-    mock.json.return_value = {"daily_bars": bars}
+    mock.json.return_value = {"data": bars}
     return mock
 
 
 def _mock_fins_response(summary: list[dict[str, Any]]) -> MagicMock:
     mock = MagicMock()
     mock.raise_for_status.return_value = None
-    mock.json.return_value = {"fins_summary": summary}
+    mock.json.return_value = {"data": summary}
     return mock
 
 
