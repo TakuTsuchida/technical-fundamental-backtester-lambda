@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
+
+_JST = ZoneInfo("Asia/Tokyo")
 
 
 class S3Store:
@@ -16,6 +20,10 @@ class S3Store:
             Body=json.dumps(data, ensure_ascii=False),
             ContentType="application/json",
         )
+
+
+def today_jst() -> str:
+    return datetime.now(_JST).strftime("%Y-%m-%d")
 
 
 def make_stock_list_key(date_str: str) -> str:
