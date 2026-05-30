@@ -25,13 +25,13 @@ class WorkerService:
         saved: list[str] = []
         for record in records:
             code: str = record["body"]
-            msg_type = (
-                record.get("messageAttributes", {}).get("type", {}).get("stringValue", "price")
-            )
+            attrs = record.get("messageAttributes", {})
+            msg_type = attrs.get("type", {}).get("stringValue", "price")
+            effective_date = attrs.get("batch_date", {}).get("stringValue", date_str)
             if msg_type == "fins":
-                s3_key = self._process_fins(code, date_str)
+                s3_key = self._process_fins(code, effective_date)
             else:
-                s3_key = self._process_price(code, date_str)
+                s3_key = self._process_price(code, effective_date)
             saved.append(s3_key)
         return saved
 
