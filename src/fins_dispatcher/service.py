@@ -9,7 +9,7 @@ from shared.jquants import EquityLister
 logger = logging.getLogger(__name__)
 
 _SQS_BATCH_SIZE = 10
-_FINS_MSG_ATTRS = {"type": {"StringValue": "fins", "DataType": "String"}}
+_FINS_TYPE_ATTR = {"StringValue": "fins", "DataType": "String"}
 
 
 @dataclass
@@ -23,13 +23,20 @@ class FinsDispatcherService:
     def __init__(self, deps: FinsDispatcherDeps) -> None:
         self._deps = deps
 
-    def run(self) -> dict[str, Any]:
+    def run(self, date_str: str) -> dict[str, Any]:
         equities = self._deps.jquants.get_listed_info()
         codes = [e["Code"] for e in equities]
         for i in range(0, len(codes), _SQS_BATCH_SIZE):
             batch = codes[i : i + _SQS_BATCH_SIZE]
             entries: list[Any] = [
-                {"Id": str(j), "MessageBody": code, "MessageAttributes": _FINS_MSG_ATTRS}
+                {
+                    "Id": str(j),
+                    "MessageBody": code,
+                    "MessageAttributes": {
+                        "type": _FINS_TYPE_ATTR,
+                        "batch_date": {"StringValue": date_str, "DataType": "String"},
+                    },
+                }
                 for j, code in enumerate(batch)
             ]
             self._deps.sqs.send_message_batch(QueueUrl=self._deps.sqs_url, Entries=entries)
