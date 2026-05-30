@@ -5,6 +5,7 @@ from typing import Any
 
 import boto3
 from shared.jquants import JQuantsClient
+from shared.s3_store import today_jst
 from shared.ssm import get_parameter
 
 from fins_dispatcher.service import FinsDispatcherDeps, FinsDispatcherService
@@ -20,4 +21,4 @@ def _make_deps() -> FinsDispatcherDeps:
 
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
-    return FinsDispatcherService(_make_deps()).run()
+    return FinsDispatcherService(_make_deps()).run(today_jst())
