@@ -75,3 +75,19 @@ class TestDispatcherServiceRun:
         result = DispatcherService(deps).run("2026-05-24")
         assert result["enqueued"] == 0
         mock_sqs.send_message_batch.assert_not_called()
+
+    def test_messages_contain_batch_date_attribute(self) -> None:
+        date_str = "2026-05-25"
+        mock_jquants = MagicMock()
+        mock_jquants.get_listed_info.return_value = [{"Code": "10000"}, {"Code": "10001"}]
+        mock_sqs = MagicMock()
+        deps = DispatcherDeps(
+            jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url="https://sqs.test/q"
+        )
+        DispatcherService(deps).run(date_str)
+        for call in mock_sqs.send_message_batch.call_args_list:
+            for entry in call.kwargs["Entries"]:
+                assert entry["MessageAttributes"]["batch_date"] == {
+                    "StringValue": date_str,
+                    "DataType": "String",
+                }
