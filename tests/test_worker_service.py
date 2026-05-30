@@ -125,3 +125,25 @@ class TestWorkerServiceFinsRouting:
         mock_store.put_json.assert_called_once_with(
             "fins-summary/13010/2026-05-24.json", summary_data
         )
+
+
+class TestWorkerServiceBatchDate:
+    def test_batch_date_attribute_takes_priority_over_date_str(self) -> None:
+        mock_jquants = MagicMock()
+        mock_jquants.get_prices_daily_quotes.return_value = []
+        deps = WorkerDeps(price_fetcher=mock_jquants, fins_fetcher=MagicMock(), store=MagicMock())
+        record = {
+            "body": "13010",
+            "messageAttributes": {
+                "batch_date": {"stringValue": "2026-05-25", "dataType": "String"},
+            },
+        }
+        saved = WorkerService(deps).process_records([record], "2026-05-27")
+        assert saved == ["daily-prices/13010/2026-05-25.json"]
+
+    def test_falls_back_to_date_str_when_batch_date_absent(self) -> None:
+        mock_jquants = MagicMock()
+        mock_jquants.get_prices_daily_quotes.return_value = []
+        deps = WorkerDeps(price_fetcher=mock_jquants, fins_fetcher=MagicMock(), store=MagicMock())
+        saved = WorkerService(deps).process_records([{"body": "13010"}], "2026-05-27")
+        assert saved == ["daily-prices/13010/2026-05-27.json"]
