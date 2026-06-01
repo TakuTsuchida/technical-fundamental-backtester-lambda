@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -9,6 +10,8 @@ from shared.s3_store import S3Store, today_jst
 from shared.ssm import get_parameter
 
 from dispatcher.service import DispatcherDeps, DispatcherService
+
+logging.basicConfig(level=logging.INFO)
 
 
 def _make_deps() -> DispatcherDeps:
