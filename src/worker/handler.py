@@ -29,7 +29,7 @@ def _poll_sqs() -> dict[str, Any]:
     sqs_url = os.environ["SQS_URL"]
     response = sqs.receive_message(
         QueueUrl=sqs_url,
-        MaxNumberOfMessages=1,
+        MaxNumberOfMessages=1,  # NOTE: upper bound — messages is always [] or [msg]
         MessageAttributeNames=["All"],
     )
     messages = response.get("Messages", [])
