@@ -79,7 +79,9 @@ class TestFinsDispatcherServiceRun:
         mock_jquants.get_listed_info.return_value = _make_equities(1)
         mock_sqs = MagicMock()
         url = "https://sqs.ap-northeast-1.amazonaws.com/123/MyQueue"
-        deps = FinsDispatcherDeps(jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url=url)
+        deps = FinsDispatcherDeps(
+            jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url=url
+        )
         FinsDispatcherService(deps).run(_DATE)
         assert mock_sqs.send_message_batch.call_args.kwargs["QueueUrl"] == url
 

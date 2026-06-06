@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import json
 from typing import Any
 from unittest.mock import MagicMock, patch
-
-import json
 
 import boto3
 import pytest
@@ -37,7 +36,7 @@ def aws_setup(mock_aws_services: None, monkeypatch: pytest.MonkeyPatch) -> dict[
     s3 = boto3.client("s3", region_name=REGION)
     s3.create_bucket(
         Bucket=S3_BUCKET,
-        CreateBucketConfiguration={"LocationConstraint": REGION},
+        CreateBucketConfiguration={"LocationConstraint": "ap-northeast-1"},
     )
 
     monkeypatch.setenv("API_KEY_PARAM", SSM_PARAM)
