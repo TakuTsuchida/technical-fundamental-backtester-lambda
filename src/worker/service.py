@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from shared.dispatcher_service import MSG_TYPE_FINS
 from shared.jquants import FinancialSummaryFetcher, PriceFetcher
 from shared.s3_store import S3Store, make_daily_prices_key, make_fins_summary_key
 
@@ -21,30 +22,30 @@ class WorkerService:
     def __init__(self, deps: WorkerDeps) -> None:
         self._deps = deps
 
-    def process_records(self, records: list[dict[str, Any]], date_str: str) -> list[str]:
+    def process_records(self, records: list[dict[str, Any]]) -> list[str]:
         saved: list[str] = []
         for record in records:
             code: str = record["body"]
             attrs = record.get("messageAttributes", {})
             msg_type = attrs.get("type", {}).get("stringValue", "price")
-            effective_date = attrs.get("batch_date", {}).get("stringValue", date_str)
-            if msg_type == "fins":
-                s3_key = self._process_fins(code, effective_date)
+            batch_date: str = attrs["batch_date"]["stringValue"]
+            if msg_type == MSG_TYPE_FINS:
+                s3_key = self._process_fins(code, batch_date)
             else:
-                s3_key = self._process_price(code, effective_date)
+                s3_key = self._process_price(code, batch_date)
             saved.append(s3_key)
         return saved
 
-    def _process_price(self, code: str, date_str: str) -> str:
+    def _process_price(self, code: str, batch_date: str) -> str:
         bars = self._deps.price_fetcher.get_prices_daily_quotes(code)
-        s3_key = make_daily_prices_key(code, date_str)
+        s3_key = make_daily_prices_key(code, batch_date)
         self._deps.store.put_json(s3_key, bars)
         logger.info("saved daily prices", extra={"code": code, "key": s3_key, "count": len(bars)})
         return s3_key
 
-    def _process_fins(self, code: str, date_str: str) -> str:
+    def _process_fins(self, code: str, batch_date: str) -> str:
         summary = self._deps.fins_fetcher.get_fins_summary(code)
-        s3_key = make_fins_summary_key(code, date_str)
+        s3_key = make_fins_summary_key(code, batch_date)
         self._deps.store.put_json(s3_key, summary)
         logger.info(
             "saved fins summary", extra={"code": code, "key": s3_key, "count": len(summary)}

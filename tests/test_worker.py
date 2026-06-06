@@ -11,6 +11,9 @@ import pytest
 REGION = "ap-northeast-1"
 SSM_PARAM = "/my-service/jquants/api_key"
 S3_BUCKET = "test-bucket"
+QUEUE_NAME = "test-queue"
+
+_BATCH_DATE = "2026-05-24"
 
 
 def _make_bars(n: int) -> list[dict[str, Any]]:
@@ -31,21 +34,25 @@ def _mock_fins_response(summary: list[dict[str, Any]]) -> MagicMock:
     return mock
 
 
-def _make_sqs_records(codes: list[str]) -> dict[str, Any]:
-    return {"Records": [{"body": code, "receiptHandle": f"rh-{code}"} for code in codes]}
+def _enqueue_price(sqs: Any, queue_url: str, code: str) -> None:
+    sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=code,
+        MessageAttributes={
+            "batch_date": {"StringValue": _BATCH_DATE, "DataType": "String"},
+        },
+    )
 
 
-def _make_fins_sqs_records(codes: list[str]) -> dict[str, Any]:
-    return {
-        "Records": [
-            {
-                "body": code,
-                "receiptHandle": f"rh-{code}",
-                "messageAttributes": {"type": {"stringValue": "fins", "dataType": "String"}},
-            }
-            for code in codes
-        ]
-    }
+def _enqueue_fins(sqs: Any, queue_url: str, code: str) -> None:
+    sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=code,
+        MessageAttributes={
+            "type": {"StringValue": "fins", "DataType": "String"},
+            "batch_date": {"StringValue": _BATCH_DATE, "DataType": "String"},
+        },
+    )
 
 
 @pytest.fixture()
@@ -59,22 +66,26 @@ def aws_setup(mock_aws_services: None, monkeypatch: pytest.MonkeyPatch) -> dict[
         CreateBucketConfiguration={"LocationConstraint": "ap-northeast-1"},
     )
 
+    sqs = boto3.client("sqs", region_name=REGION)
+    queue_url = sqs.create_queue(QueueName=QUEUE_NAME)["QueueUrl"]
+
     monkeypatch.setenv("API_KEY_PARAM", SSM_PARAM)
     monkeypatch.setenv("S3_BUCKET", S3_BUCKET)
+    monkeypatch.setenv("SQS_URL", queue_url)
 
-    return {"s3": s3}
+    return {"s3": s3, "sqs": sqs, "queue_url": queue_url}
 
 
 class TestHandlerSuccess:
     def test_saves_daily_prices_to_s3(self, aws_setup: dict[str, Any]) -> None:
         bars = _make_bars(5)
-        mock_resp = _mock_jquants_response(bars)
+        _enqueue_price(aws_setup["sqs"], aws_setup["queue_url"], "13010")
 
         importlib.invalidate_caches()
         from worker.handler import handler
 
-        with patch("shared.jquants.requests.get", return_value=mock_resp):
-            result = handler(_make_sqs_records(["13010"]), object())
+        with patch("shared.jquants.requests.get", return_value=_mock_jquants_response(bars)):
+            result = handler({}, object())
 
         assert result["statusCode"] == 200
         saved = result["saved"]
@@ -84,49 +95,49 @@ class TestHandlerSuccess:
 
     def test_s3_key_format(self, aws_setup: dict[str, Any]) -> None:
         bars = _make_bars(3)
-        mock_resp = _mock_jquants_response(bars)
+        _enqueue_price(aws_setup["sqs"], aws_setup["queue_url"], "72030")
 
         from worker.handler import handler
 
-        with patch("shared.jquants.requests.get", return_value=mock_resp):
-            result = handler(_make_sqs_records(["72030"]), object())
+        with patch("shared.jquants.requests.get", return_value=_mock_jquants_response(bars)):
+            result = handler({}, object())
 
         key = result["saved"][0]
-        assert key.startswith("daily-prices/72030/")
-        assert key.endswith(".json")
+        assert key == f"daily-prices/72030/{_BATCH_DATE}.json"
 
-    def test_processes_multiple_records(self, aws_setup: dict[str, Any]) -> None:
-        bars = _make_bars(2)
-        mock_resp = _mock_jquants_response(bars)
-
+    def test_no_message_returns_empty_saved(self, aws_setup: dict[str, Any]) -> None:
         from worker.handler import handler
 
-        codes = ["13010", "72030", "86970"]
-        with patch("shared.jquants.requests.get", return_value=mock_resp):
-            result = handler(_make_sqs_records(codes), object())
-
-        assert result["statusCode"] == 200
-        assert len(result["saved"]) == 3
-
-    def test_empty_records_returns_empty_saved(self, aws_setup: dict[str, Any]) -> None:
-        from worker.handler import handler
-
-        result = handler({"Records": []}, object())
+        result = handler({}, object())
 
         assert result["statusCode"] == 200
         assert result["saved"] == []
+
+    def test_deletes_message_after_processing(self, aws_setup: dict[str, Any]) -> None:
+        bars = _make_bars(2)
+        _enqueue_price(aws_setup["sqs"], aws_setup["queue_url"], "13010")
+
+        from worker.handler import handler
+
+        with patch("shared.jquants.requests.get", return_value=_mock_jquants_response(bars)):
+            handler({}, object())
+
+        remaining = aws_setup["sqs"].receive_message(
+            QueueUrl=aws_setup["queue_url"], MaxNumberOfMessages=1
+        )
+        assert "Messages" not in remaining
 
 
 class TestHandlerFinsSummary:
     def test_saves_fins_summary_to_s3(self, aws_setup: dict[str, Any]) -> None:
         summary = [{"DiscDate": "2026-02-06", "Sales": "256910000000"}]
-        mock_resp = _mock_fins_response(summary)
+        _enqueue_fins(aws_setup["sqs"], aws_setup["queue_url"], "13010")
 
         importlib.invalidate_caches()
         from worker.handler import handler
 
-        with patch("shared.jquants.requests.get", return_value=mock_resp):
-            result = handler(_make_fins_sqs_records(["13010"]), object())
+        with patch("shared.jquants.requests.get", return_value=_mock_fins_response(summary)):
+            result = handler({}, object())
 
         assert result["statusCode"] == 200
         saved = result["saved"]
@@ -135,13 +146,12 @@ class TestHandlerFinsSummary:
         assert json.loads(body) == summary
 
     def test_fins_s3_key_format(self, aws_setup: dict[str, Any]) -> None:
-        mock_resp = _mock_fins_response([])
+        _enqueue_fins(aws_setup["sqs"], aws_setup["queue_url"], "72030")
 
         from worker.handler import handler
 
-        with patch("shared.jquants.requests.get", return_value=mock_resp):
-            result = handler(_make_fins_sqs_records(["72030"]), object())
+        with patch("shared.jquants.requests.get", return_value=_mock_fins_response([])):
+            result = handler({}, object())
 
         key = result["saved"][0]
-        assert key.startswith("fins-summary/72030/")
-        assert key.endswith(".json")
+        assert key == f"fins-summary/72030/{_BATCH_DATE}.json"

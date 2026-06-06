@@ -9,7 +9,7 @@ from shared.jquants import JQuantsClient
 from shared.s3_store import S3Store, today_jst
 from shared.ssm import get_parameter
 
-from dispatcher.service import DispatcherDeps, DispatcherService
+from dispatcher.service import DispatcherDeps, PriceDispatcherService
 
 logging.basicConfig(level=logging.INFO)
 
@@ -25,5 +25,4 @@ def _make_deps() -> DispatcherDeps:
 
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
-    date_str = today_jst()
-    return DispatcherService(_make_deps()).run(date_str)
+    return PriceDispatcherService(_make_deps()).dispatch(today_jst())

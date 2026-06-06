@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +11,7 @@ import pytest
 REGION = "ap-northeast-1"
 SSM_PARAM = "/my-service/jquants/api_key"
 QUEUE_NAME = "test-queue"
+S3_BUCKET = "test-bucket"
 
 
 def _make_equities(n: int) -> list[dict[str, Any]]:
@@ -31,10 +33,17 @@ def aws_setup(mock_aws_services: None, monkeypatch: pytest.MonkeyPatch) -> dict[
     sqs = boto3.client("sqs", region_name=REGION)
     queue_url = sqs.create_queue(QueueName=QUEUE_NAME)["QueueUrl"]
 
+    s3 = boto3.client("s3", region_name=REGION)
+    s3.create_bucket(
+        Bucket=S3_BUCKET,
+        CreateBucketConfiguration={"LocationConstraint": "ap-northeast-1"},
+    )
+
     monkeypatch.setenv("API_KEY_PARAM", SSM_PARAM)
     monkeypatch.setenv("SQS_URL", queue_url)
+    monkeypatch.setenv("S3_BUCKET", S3_BUCKET)
 
-    return {"sqs": sqs, "queue_url": queue_url}
+    return {"sqs": sqs, "queue_url": queue_url, "s3": s3}
 
 
 def _drain_sqs(sqs: Any, queue_url: str) -> list[dict[str, Any]]:
@@ -84,6 +93,21 @@ class TestFinsHandlerSuccess:
         for msg in messages:
             assert msg["MessageAttributes"]["type"]["StringValue"] == "fins"
 
+    def test_saves_stock_list_to_s3(self, aws_setup: dict[str, Any]) -> None:
+        equities = _make_equities(3)
+        mock_resp = _mock_jquants_response(equities)
+
+        from fins_dispatcher.handler import handler
+
+        with patch("shared.jquants.requests.get", return_value=mock_resp):
+            result = handler({}, object())
+
+        s3_key = result["s3_key"]
+        assert s3_key.startswith("stock-list/")
+        assert s3_key.endswith(".json")
+        body = aws_setup["s3"].get_object(Bucket=S3_BUCKET, Key=s3_key)["Body"].read()
+        assert json.loads(body) == equities
+
     def test_returns_correct_status(self, aws_setup: dict[str, Any]) -> None:
         equities = _make_equities(5)
         mock_resp = _mock_jquants_response(equities)
@@ -93,7 +117,9 @@ class TestFinsHandlerSuccess:
         with patch("shared.jquants.requests.get", return_value=mock_resp):
             result = handler({}, object())
 
-        assert result == {"statusCode": 200, "enqueued": 5}
+        assert result["statusCode"] == 200
+        assert result["enqueued"] == 5
+        assert result["s3_key"].startswith("stock-list/")
 
     def test_empty_equities_returns_zero(self, aws_setup: dict[str, Any]) -> None:
         mock_resp = _mock_jquants_response([])

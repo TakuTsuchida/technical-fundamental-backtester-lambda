@@ -18,6 +18,3 @@ def get_parameter(name: str) -> str:
     return resp["Parameter"]["Value"]
 
 
-def put_parameter(name: str, value: str) -> None:
-    client = _client()
-    client.put_parameter(Name=name, Value=value, Type="SecureString", Overwrite=True)
