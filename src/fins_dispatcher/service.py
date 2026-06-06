@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from shared.dispatcher_service import DispatcherDeps, DispatcherService, MSG_TYPE_FINS
+from shared.dispatcher_service import MSG_TYPE_FINS, DispatcherDeps, DispatcherService
 
 __all__ = ["DispatcherDeps", "FinsDispatcherService"]
 
