@@ -55,9 +55,4 @@ def _poll_sqs() -> dict[str, Any]:
 
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
-    if "Records" not in event:
-        # EventBridge trigger — manually poll SQS
-        return _poll_sqs()
-    records = event["Records"]
-    saved = WorkerService(_make_deps()).process_records(records)
-    return {"statusCode": 200, "saved": saved}
+    return _poll_sqs()
