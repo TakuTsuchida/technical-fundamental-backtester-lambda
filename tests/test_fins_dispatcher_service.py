@@ -14,7 +14,12 @@ def _make_equities(n: int) -> list[dict[str, Any]]:
 
 
 def _make_deps(mock_jquants: MagicMock, mock_sqs: MagicMock) -> FinsDispatcherDeps:
-    return FinsDispatcherDeps(jquants=mock_jquants, sqs=mock_sqs, sqs_url="https://sqs.test/q")
+    return FinsDispatcherDeps(
+        jquants=mock_jquants,
+        store=MagicMock(),
+        sqs=mock_sqs,
+        sqs_url="https://sqs.test/q",
+    )
 
 
 class TestFinsDispatcherServiceRun:
@@ -23,7 +28,21 @@ class TestFinsDispatcherServiceRun:
         mock_jquants.get_listed_info.return_value = _make_equities(5)
         deps = _make_deps(mock_jquants, MagicMock())
         result = FinsDispatcherService(deps).run(_DATE)
-        assert result == {"statusCode": 200, "enqueued": 5}
+        assert result == {"statusCode": 200, "enqueued": 5, "s3_key": f"stock-list/{_DATE}.json"}
+
+    def test_saves_stock_list_to_s3(self) -> None:
+        mock_jquants = MagicMock()
+        equities = _make_equities(3)
+        mock_jquants.get_listed_info.return_value = equities
+        mock_store = MagicMock()
+        deps = FinsDispatcherDeps(
+            jquants=mock_jquants,
+            store=mock_store,
+            sqs=MagicMock(),
+            sqs_url="https://sqs.test/q",
+        )
+        FinsDispatcherService(deps).run(_DATE)
+        mock_store.put_json.assert_called_once_with(f"stock-list/{_DATE}.json", equities)
 
     def test_enqueues_all_codes(self) -> None:
         mock_jquants = MagicMock()
@@ -60,7 +79,7 @@ class TestFinsDispatcherServiceRun:
         mock_jquants.get_listed_info.return_value = _make_equities(1)
         mock_sqs = MagicMock()
         url = "https://sqs.ap-northeast-1.amazonaws.com/123/MyQueue"
-        deps = FinsDispatcherDeps(jquants=mock_jquants, sqs=mock_sqs, sqs_url=url)
+        deps = FinsDispatcherDeps(jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url=url)
         FinsDispatcherService(deps).run(_DATE)
         assert mock_sqs.send_message_batch.call_args.kwargs["QueueUrl"] == url
 
