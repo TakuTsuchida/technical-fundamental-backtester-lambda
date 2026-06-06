@@ -59,9 +59,7 @@ class TestPriceDispatcherServiceDispatch:
         mock_jquants.get_listed_info.return_value = [{"Code": "10000"}]
         mock_sqs = MagicMock()
         url = "https://sqs.ap-northeast-1.amazonaws.com/123/MyQueue"
-        deps = DispatcherDeps(
-            jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url=url
-        )
+        deps = DispatcherDeps(jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url=url)
         PriceDispatcherService(deps).dispatch("2026-05-24")
         assert mock_sqs.send_message_batch.call_args.kwargs["QueueUrl"] == url
 
