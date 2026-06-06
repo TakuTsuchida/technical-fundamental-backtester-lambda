@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
-from dispatcher.service import DispatcherDeps, DispatcherService
+from dispatcher.service import DispatcherDeps, PriceDispatcherService
 
 
-class TestDispatcherServiceRun:
+class TestPriceDispatcherServiceDispatch:
     def test_saves_stock_list_to_s3(self) -> None:
         equities = [{"Code": "10000"}, {"Code": "10001"}]
         mock_jquants = MagicMock()
@@ -15,7 +15,7 @@ class TestDispatcherServiceRun:
         deps = DispatcherDeps(
             jquants=mock_jquants, store=mock_store, sqs=MagicMock(), sqs_url="https://sqs.test/q"
         )
-        DispatcherService(deps).run("2026-05-24")
+        PriceDispatcherService(deps).dispatch("2026-05-24")
         mock_store.put_json.assert_called_once_with("stock-list/2026-05-24.json", equities)
 
     def test_returns_correct_result(self) -> None:
@@ -25,7 +25,7 @@ class TestDispatcherServiceRun:
         deps = DispatcherDeps(
             jquants=mock_jquants, store=MagicMock(), sqs=MagicMock(), sqs_url="https://sqs.test/q"
         )
-        result = DispatcherService(deps).run("2026-05-24")
+        result = PriceDispatcherService(deps).dispatch("2026-05-24")
         assert result == {"statusCode": 200, "enqueued": 5, "s3_key": "stock-list/2026-05-24.json"}
 
     def test_enqueues_codes_in_batches_of_ten(self) -> None:
@@ -36,7 +36,7 @@ class TestDispatcherServiceRun:
         deps = DispatcherDeps(
             jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url="https://sqs.test/q"
         )
-        DispatcherService(deps).run("2026-05-24")
+        PriceDispatcherService(deps).dispatch("2026-05-24")
         assert mock_sqs.send_message_batch.call_count == 2
 
     def test_sends_all_codes_across_batches(self) -> None:
@@ -47,7 +47,7 @@ class TestDispatcherServiceRun:
         deps = DispatcherDeps(
             jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url="https://sqs.test/q"
         )
-        DispatcherService(deps).run("2026-05-24")
+        PriceDispatcherService(deps).dispatch("2026-05-24")
         sent_codes: list[str] = []
         for c in mock_sqs.send_message_batch.call_args_list:
             entries = c.kwargs["Entries"]
@@ -62,7 +62,7 @@ class TestDispatcherServiceRun:
         deps = DispatcherDeps(
             jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url=url
         )
-        DispatcherService(deps).run("2026-05-24")
+        PriceDispatcherService(deps).dispatch("2026-05-24")
         assert mock_sqs.send_message_batch.call_args.kwargs["QueueUrl"] == url
 
     def test_empty_equities_returns_zero_enqueued(self) -> None:
@@ -72,22 +72,34 @@ class TestDispatcherServiceRun:
         deps = DispatcherDeps(
             jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url="https://sqs.test/q"
         )
-        result = DispatcherService(deps).run("2026-05-24")
+        result = PriceDispatcherService(deps).dispatch("2026-05-24")
         assert result["enqueued"] == 0
         mock_sqs.send_message_batch.assert_not_called()
 
     def test_messages_contain_batch_date_attribute(self) -> None:
-        date_str = "2026-05-25"
+        batch_date = "2026-05-25"
         mock_jquants = MagicMock()
         mock_jquants.get_listed_info.return_value = [{"Code": "10000"}, {"Code": "10001"}]
         mock_sqs = MagicMock()
         deps = DispatcherDeps(
             jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url="https://sqs.test/q"
         )
-        DispatcherService(deps).run(date_str)
+        PriceDispatcherService(deps).dispatch(batch_date)
         for call in mock_sqs.send_message_batch.call_args_list:
             for entry in call.kwargs["Entries"]:
                 assert entry["MessageAttributes"]["batch_date"] == {
-                    "StringValue": date_str,
+                    "StringValue": batch_date,
                     "DataType": "String",
                 }
+
+    def test_messages_do_not_contain_type_attribute(self) -> None:
+        mock_jquants = MagicMock()
+        mock_jquants.get_listed_info.return_value = [{"Code": "10000"}]
+        mock_sqs = MagicMock()
+        deps = DispatcherDeps(
+            jquants=mock_jquants, store=MagicMock(), sqs=mock_sqs, sqs_url="https://sqs.test/q"
+        )
+        PriceDispatcherService(deps).dispatch("2026-05-24")
+        for call in mock_sqs.send_message_batch.call_args_list:
+            for entry in call.kwargs["Entries"]:
+                assert "type" not in entry["MessageAttributes"]
