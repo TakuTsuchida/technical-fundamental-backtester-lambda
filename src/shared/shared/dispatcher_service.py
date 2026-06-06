@@ -52,9 +52,7 @@ class DispatcherService:
         return {"statusCode": 200, "enqueued": len(codes), "s3_key": s3_key}
 
     def _build_msg_attrs(self, batch_date: str) -> dict[str, Any]:
-        attrs: dict[str, Any] = {
-            "batch_date": {"StringValue": batch_date, "DataType": "String"}
-        }
+        attrs: dict[str, Any] = {"batch_date": {"StringValue": batch_date, "DataType": "String"}}
         if self._msg_type is not None:
             attrs["type"] = {"StringValue": self._msg_type, "DataType": "String"}
         return attrs
