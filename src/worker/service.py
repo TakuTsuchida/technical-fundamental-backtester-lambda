@@ -21,13 +21,13 @@ class WorkerService:
     def __init__(self, deps: WorkerDeps) -> None:
         self._deps = deps
 
-    def process_records(self, records: list[dict[str, Any]], date_str: str) -> list[str]:
+    def process_records(self, records: list[dict[str, Any]]) -> list[str]:
         saved: list[str] = []
         for record in records:
             code: str = record["body"]
             attrs = record.get("messageAttributes", {})
             msg_type = attrs.get("type", {}).get("stringValue", "price")
-            effective_date = attrs.get("batch_date", {}).get("stringValue", date_str)
+            effective_date: str = attrs["batch_date"]["stringValue"]
             if msg_type == "fins":
                 s3_key = self._process_fins(code, effective_date)
             else:
