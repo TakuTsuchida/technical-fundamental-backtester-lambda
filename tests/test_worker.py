@@ -31,8 +31,22 @@ def _mock_fins_response(summary: list[dict[str, Any]]) -> MagicMock:
     return mock
 
 
+_BATCH_DATE = "2026-05-24"
+
+
 def _make_sqs_records(codes: list[str]) -> dict[str, Any]:
-    return {"Records": [{"body": code, "receiptHandle": f"rh-{code}"} for code in codes]}
+    return {
+        "Records": [
+            {
+                "body": code,
+                "receiptHandle": f"rh-{code}",
+                "messageAttributes": {
+                    "batch_date": {"stringValue": _BATCH_DATE, "dataType": "String"},
+                },
+            }
+            for code in codes
+        ]
+    }
 
 
 def _make_fins_sqs_records(codes: list[str]) -> dict[str, Any]:
@@ -41,7 +55,10 @@ def _make_fins_sqs_records(codes: list[str]) -> dict[str, Any]:
             {
                 "body": code,
                 "receiptHandle": f"rh-{code}",
-                "messageAttributes": {"type": {"stringValue": "fins", "dataType": "String"}},
+                "messageAttributes": {
+                    "type": {"stringValue": "fins", "dataType": "String"},
+                    "batch_date": {"stringValue": _BATCH_DATE, "dataType": "String"},
+                },
             }
             for code in codes
         ]
