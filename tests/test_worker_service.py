@@ -34,9 +34,7 @@ class TestWorkerServiceProcessRecords:
     def test_returns_s3_key_per_record(self) -> None:
         mock_jquants = MagicMock()
         mock_jquants.get_prices_daily_quotes.return_value = []
-        deps = WorkerDeps(
-            price_fetcher=mock_jquants, fins_fetcher=MagicMock(), store=MagicMock()
-        )
+        deps = WorkerDeps(price_fetcher=mock_jquants, fins_fetcher=MagicMock(), store=MagicMock())
         saved = WorkerService(deps).process_records([_price_record("13010")])
         assert saved == ["daily-prices/13010/2026-05-24.json"]
 
@@ -45,9 +43,7 @@ class TestWorkerServiceProcessRecords:
         mock_jquants.get_prices_daily_quotes.return_value = [{"Date": "2026-05-24", "Close": 1000}]
         mock_store = MagicMock()
         deps = WorkerDeps(price_fetcher=mock_jquants, fins_fetcher=MagicMock(), store=mock_store)
-        WorkerService(deps).process_records(
-            [_price_record("13010"), _price_record("72030")]
-        )
+        WorkerService(deps).process_records([_price_record("13010"), _price_record("72030")])
         assert mock_store.put_json.call_count == 2
 
     def test_calls_get_prices_for_each_code(self) -> None:
