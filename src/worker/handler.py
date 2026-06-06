@@ -6,7 +6,7 @@ from typing import Any
 
 import boto3
 from shared.jquants import JQuantsClient
-from shared.s3_store import S3Store, today_jst
+from shared.s3_store import S3Store
 from shared.ssm import get_parameter
 
 from worker.service import WorkerDeps, WorkerService
@@ -24,7 +24,7 @@ def _make_deps() -> WorkerDeps:
     )
 
 
-def _poll_sqs(date_str: str) -> dict[str, Any]:
+def _poll_sqs() -> dict[str, Any]:
     sqs = boto3.client("sqs")
     sqs_url = os.environ["SQS_URL"]
     response = sqs.receive_message(
@@ -46,7 +46,7 @@ def _poll_sqs(date_str: str) -> dict[str, Any]:
         }
         for msg in messages
     ]
-    saved = WorkerService(_make_deps()).process_records(records, date_str)
+    saved = WorkerService(_make_deps()).process_records(records)
 
     for msg in messages:
         sqs.delete_message(QueueUrl=sqs_url, ReceiptHandle=msg["ReceiptHandle"])
@@ -55,10 +55,9 @@ def _poll_sqs(date_str: str) -> dict[str, Any]:
 
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
-    date_str = today_jst()
     if "Records" not in event:
         # EventBridge trigger — manually poll SQS
-        return _poll_sqs(date_str)
+        return _poll_sqs()
     records = event["Records"]
-    saved = WorkerService(_make_deps()).process_records(records, date_str)
+    saved = WorkerService(_make_deps()).process_records(records)
     return {"statusCode": 200, "saved": saved}
