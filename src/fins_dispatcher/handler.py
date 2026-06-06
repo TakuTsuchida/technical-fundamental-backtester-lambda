@@ -9,14 +9,14 @@ from shared.jquants import JQuantsClient
 from shared.s3_store import S3Store, today_jst
 from shared.ssm import get_parameter
 
-from fins_dispatcher.service import FinsDispatcherDeps, FinsDispatcherService
+from fins_dispatcher.service import DispatcherDeps, FinsDispatcherService
 
 logging.basicConfig(level=logging.INFO)
 
 
-def _make_deps() -> FinsDispatcherDeps:
+def _make_deps() -> DispatcherDeps:
     api_key = get_parameter(os.environ["API_KEY_PARAM"])
-    return FinsDispatcherDeps(
+    return DispatcherDeps(
         jquants=JQuantsClient(api_key=api_key),
         store=S3Store(boto3.client("s3"), os.environ["S3_BUCKET"]),
         sqs=boto3.client("sqs"),
@@ -25,4 +25,4 @@ def _make_deps() -> FinsDispatcherDeps:
 
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
-    return FinsDispatcherService(_make_deps()).run(today_jst())
+    return FinsDispatcherService(_make_deps()).dispatch(today_jst())
