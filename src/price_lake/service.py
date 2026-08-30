@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import io
 import logging
-import time
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from botocore.exceptions import ConnectionError as BotoConnectionError
 from shared.s3_store import (
     S3Store,
     lake_data_key,
@@ -19,11 +18,14 @@ from shared.s3_store import (
 
 logger = logging.getLogger(__name__)
 
-# A long sequential run occasionally hits a stale pooled HTTPS connection
-# (SSLError: UNEXPECTED_EOF_WHILE_READING) partway through; a fresh attempt
-# almost always succeeds, so retry a few times before giving up on a code.
-_FETCH_MAX_ATTEMPTS = 3
-_FETCH_RETRY_BACKOFF_SECONDS = 1.0
+# Retries for transient S3 errors (connection resets, read timeouts,
+# throttling) are handled entirely by the boto3 client's Config(retries=...)
+# (see handler.py) -- not here. That config is set at the HTTP layer, which
+# is where botocore.exceptions.ReadTimeoutError (not a ConnectionError
+# subclass) also gets caught; an app-level retry limited to ConnectionError
+# would miss it. FETCH_MAX_WORKERS is public (no leading underscore) because
+# handler.py imports it to size the client's connection pool accordingly.
+FETCH_MAX_WORKERS = 20
 
 
 @dataclass
@@ -73,51 +75,58 @@ class PriceLakeService:
         rows: list[dict[str, Any]] = []
         processed = 0
         skipped = 0
-        for code in codes:
-            try:
-                bars, latest_date = self._fetch_code_with_retry(code)
-            except Exception:
-                logger.error(
-                    "aborting price lake run after fetch failure -- "
-                    "%d/%d codes processed before this point",
-                    processed,
-                    len(codes),
-                    extra={"code": code, "codes_processed": processed, "codes_total": len(codes)},
-                )
-                raise
-            if bars is None:
-                skipped += 1
-                logger.warning(
-                    "no snapshot for code at latest date",
-                    extra={"code": code, "date": latest_date},
-                )
-                continue
-            for bar in bars:
-                row = dict(bar)
-                row["code"] = code
-                rows.append(row)
-            processed += 1
+        completed = 0
+        total = len(codes)
+
+        # rows/processed/skipped/completed are only ever mutated from this
+        # method (the as_completed loop runs on the main thread) -- worker
+        # threads just return a result or raise, so no lock is needed.
+        with ThreadPoolExecutor(max_workers=FETCH_MAX_WORKERS) as executor:
+            future_to_code: dict[Future[tuple[list[dict[str, Any]] | None, str]], str] = {
+                executor.submit(self._fetch_code, code): code for code in codes
+            }
+            for future in as_completed(future_to_code):
+                code = future_to_code[future]
+                try:
+                    bars, latest_date = future.result()
+                except Exception:
+                    # Cancel whatever hasn't started yet and wait for
+                    # already-running fetches to finish before re-raising --
+                    # run() never writes a partial dataset either way, but
+                    # this keeps the executor's shutdown clean.
+                    executor.shutdown(wait=True, cancel_futures=True)
+                    logger.error(
+                        "aborting price lake run after fetch failure for code %s -- "
+                        "%d/%d codes had completed before this point "
+                        "(completion order is not deterministic under "
+                        "concurrency, so this is not necessarily the first N)",
+                        code,
+                        completed,
+                        total,
+                        extra={"code": code, "codes_completed": completed, "codes_total": total},
+                    )
+                    raise
+                completed += 1
+                if bars is None:
+                    skipped += 1
+                    logger.warning(
+                        "no snapshot for code at latest date",
+                        extra={"code": code, "date": latest_date},
+                    )
+                    continue
+                for bar in bars:
+                    row = dict(bar)
+                    row["code"] = code
+                    rows.append(row)
+                processed += 1
         return rows, processed, skipped
 
-    def _fetch_code_with_retry(self, code: str) -> tuple[list[dict[str, Any]] | None, str]:
-        for attempt in range(1, _FETCH_MAX_ATTEMPTS + 1):
-            try:
-                keys = self._deps.source_store.list_keys(f"daily-prices/{code}/")
-                dates = [key.rsplit("/", 1)[-1].removesuffix(".json") for key in keys]
-                latest_date = self._latest_date(dates)
-                bars = self._deps.source_store.get_json(make_daily_prices_key(code, latest_date))
-                return bars, latest_date
-            except BotoConnectionError:
-                if attempt == _FETCH_MAX_ATTEMPTS:
-                    raise
-                logger.warning(
-                    "retrying code after transient S3 connection error (attempt %d/%d)",
-                    attempt,
-                    _FETCH_MAX_ATTEMPTS,
-                    extra={"code": code},
-                )
-                time.sleep(_FETCH_RETRY_BACKOFF_SECONDS * attempt)
-        raise AssertionError("unreachable")  # loop always returns or raises
+    def _fetch_code(self, code: str) -> tuple[list[dict[str, Any]] | None, str]:
+        keys = self._deps.source_store.list_keys(f"daily-prices/{code}/")
+        dates = [key.rsplit("/", 1)[-1].removesuffix(".json") for key in keys]
+        latest_date = self._latest_date(dates)
+        bars = self._deps.source_store.get_json(make_daily_prices_key(code, latest_date))
+        return bars, latest_date
 
     def _load_existing_table(self) -> pa.Table | None:
         blob = self._deps.dest_store.get_object_bytes(lake_data_key(self._deps.lake_prefix))
