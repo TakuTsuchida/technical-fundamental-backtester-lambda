@@ -10,7 +10,16 @@ from shared.s3_store import S3Store
 
 from price_lake.service import FETCH_MAX_WORKERS, PriceLakeDeps, PriceLakeService
 
-logging.basicConfig(level=logging.INFO)
+# force=True is required here: the AWS base image's Runtime Interface
+# Client already attaches a handler to the root logger before this module
+# is imported, and basicConfig() is a no-op whenever the root logger
+# already has handlers unless forced. Without it, every logger.info() call
+# (including the checkpoint logging this function depends on) is silently
+# dropped -- confirmed in production, where WARNING/ERROR logs came through
+# fine (the root logger's un-configured default level) but zero INFO lines
+# ever reached CloudWatch, even the REPORT-adjacent final "price lake
+# updated" line on what should have been a successful run.
+logging.basicConfig(level=logging.INFO, force=True)
 
 # botocore defaults connect_timeout/read_timeout to effectively unbounded,
 # which let a single stuck S3 call hang for minutes in production before
