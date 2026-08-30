@@ -16,7 +16,6 @@ def _deps(
         dest_store=dest_store if dest_store is not None else MagicMock(),
         lake_prefix="lake-store/daily-prices/v1",
         commit_sha="abc1234",
-        date_sample_size=2,
     )
 
 
@@ -32,8 +31,18 @@ class TestListAllCodes:
         source_store.list_common_prefixes.assert_called_once_with("daily-prices/")
 
 
-class TestDiscoverLatestSnapshotDate:
-    def test_returns_max_date_across_sampled_codes(self) -> None:
+class TestLatestDate:
+    def test_returns_max_of_given_dates(self) -> None:
+        service = PriceLakeService(_deps())
+        result = service._latest_date(["2026-08-16", "2026-08-23", "2026-08-09"])
+        assert result == "2026-08-23"
+
+
+class TestFetchLatestRows:
+    def test_each_code_uses_its_own_latest_date(self) -> None:
+        # 13010's newest run succeeded (2026-08-23); 72030's newest run
+        # failed, so only its older snapshot (2026-08-16) exists. Each code
+        # should still be processed at whichever date it actually has.
         source_store = MagicMock()
 
         def list_keys(prefix: str) -> list[str]:
@@ -42,65 +51,47 @@ class TestDiscoverLatestSnapshotDate:
                     "daily-prices/13010/2026-08-16.json",
                     "daily-prices/13010/2026-08-23.json",
                 ],
-                "daily-prices/86970/": [
-                    "daily-prices/86970/2026-08-09.json",
-                ],
+                "daily-prices/72030/": ["daily-prices/72030/2026-08-16.json"],
             }[prefix]
-
-        source_store.list_keys.side_effect = list_keys
-        service = PriceLakeService(_deps(source_store=source_store))
-        result = service._discover_latest_snapshot_date(["13010", "86970"])
-        assert result == "2026-08-23"
-
-    def test_tolerates_one_sampled_code_missing_the_newest_date(self) -> None:
-        # The sample includes a code whose latest run failed (only an older
-        # snapshot exists); another sampled code still surfaces the true max.
-        source_store = MagicMock()
-
-        def list_keys(prefix: str) -> list[str]:
-            return {
-                "daily-prices/13010/": ["daily-prices/13010/2026-08-16.json"],
-                "daily-prices/72030/": ["daily-prices/72030/2026-08-23.json"],
-            }[prefix]
-
-        source_store.list_keys.side_effect = list_keys
-        service = PriceLakeService(_deps(source_store=source_store))
-        result = service._discover_latest_snapshot_date(["13010", "72030"])
-        assert result == "2026-08-23"
-
-    def test_raises_on_empty_codes(self) -> None:
-        import pytest
-
-        service = PriceLakeService(_deps())
-        with pytest.raises(ValueError, match="no stock codes"):
-            service._discover_latest_snapshot_date([])
-
-
-class TestFetchLatestRows:
-    def test_skips_code_missing_the_snapshot(self) -> None:
-        source_store = MagicMock()
 
         def get_json(key: str) -> list[dict[str, Any]] | None:
             return {
                 "daily-prices/13010/2026-08-23.json": [{"Date": "2026-08-23", "Close": 100}],
-                "daily-prices/72030/2026-08-23.json": None,
+                "daily-prices/72030/2026-08-16.json": [{"Date": "2026-08-16", "Close": 190}],
             }[key]
 
+        source_store.list_keys.side_effect = list_keys
         source_store.get_json.side_effect = get_json
         service = PriceLakeService(_deps(source_store=source_store))
-        rows, processed, skipped = service._fetch_latest_rows(["13010", "72030"], "2026-08-23")
-        assert rows == [{"Date": "2026-08-23", "Close": 100, "code": "13010"}]
-        assert processed == 1
+        rows, processed, skipped = service._fetch_latest_rows(["13010", "72030"])
+        assert rows == [
+            {"Date": "2026-08-23", "Close": 100, "code": "13010"},
+            {"Date": "2026-08-16", "Close": 190, "code": "72030"},
+        ]
+        assert processed == 2
+        assert skipped == 0
+
+    def test_skips_code_whose_latest_snapshot_disappears(self) -> None:
+        # Defensive path: list_keys found a key, but get_json returns None
+        # (e.g. deleted between the list and the get).
+        source_store = MagicMock()
+        source_store.list_keys.return_value = ["daily-prices/13010/2026-08-23.json"]
+        source_store.get_json.return_value = None
+        service = PriceLakeService(_deps(source_store=source_store))
+        rows, processed, skipped = service._fetch_latest_rows(["13010"])
+        assert rows == []
+        assert processed == 0
         assert skipped == 1
 
     def test_injects_code_into_every_bar(self) -> None:
         source_store = MagicMock()
+        source_store.list_keys.return_value = ["daily-prices/13010/2026-08-23.json"]
         source_store.get_json.return_value = [
             {"Date": "2026-08-16", "Close": 90},
             {"Date": "2026-08-23", "Close": 100},
         ]
         service = PriceLakeService(_deps(source_store=source_store))
-        rows, processed, skipped = service._fetch_latest_rows(["13010"], "2026-08-23")
+        rows, processed, skipped = service._fetch_latest_rows(["13010"])
         assert [r["code"] for r in rows] == ["13010", "13010"]
         assert processed == 1
         assert skipped == 0
@@ -144,19 +135,18 @@ class TestMergeUpsert:
 class TestBuildMetadata:
     def test_features_match_table_schema(self) -> None:
         table = pa.Table.from_pylist([{"code": "13010", "Date": "2026-08-23", "Close": 100}])
-        metadata = PriceLakeService(_deps())._build_metadata(table, "2026-08-23", 1, 0)
+        metadata = PriceLakeService(_deps())._build_metadata(table, 1, 0)
         assert metadata["features"] == [
             {"name": f.name, "dtype": str(f.type)} for f in table.schema
         ]
 
     def test_carries_through_commit_sha_and_counts(self) -> None:
         table = pa.Table.from_pylist([{"code": "13010", "Date": "2026-08-23", "Close": 100}])
-        metadata = PriceLakeService(_deps())._build_metadata(table, "2026-08-23", 3, 1)
+        metadata = PriceLakeService(_deps())._build_metadata(table, 3, 1)
         assert metadata["commit_sha"] == "abc1234"
         assert metadata["row_count"] == 1
         assert metadata["codes_processed"] == 3
         assert metadata["codes_skipped"] == 1
-        assert metadata["latest_snapshot_date"] == "2026-08-23"
 
 
 class TestRun:
@@ -171,7 +161,6 @@ class TestRun:
         result = PriceLakeService(_deps(source_store=source_store, dest_store=dest_store)).run()
 
         assert result["statusCode"] == 200
-        assert result["latest_snapshot_date"] == "2026-08-23"
         assert result["codes_processed"] == 1
         assert result["codes_skipped"] == 0
         assert result["row_count"] == 1
