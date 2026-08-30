@@ -68,8 +68,9 @@ def aws_setup(mock_aws_services: None, monkeypatch: pytest.MonkeyPatch) -> dict[
 class TestHandlerUpsertsIntoExistingDataset:
     def test_merges_new_snapshot_with_existing_lake(self, aws_setup: dict[str, Any]) -> None:
         s3 = aws_setup["s3"]
-        # 13010 and 72030 have the newest snapshot (2026-08-23); 86970's latest
-        # weekly run failed, so only its older snapshot (2026-08-16) exists.
+        # 13010 and 72030 have a newer snapshot (2026-08-23); 86970's latest
+        # weekly run failed, so only its older snapshot (2026-08-16) exists --
+        # it should still be processed at its own latest date, not skipped.
         _put_daily_prices(s3, "13010", "2026-08-16", [{"Date": "2026-08-09", "Close": 90}])
         _put_daily_prices(
             s3,
@@ -94,25 +95,24 @@ class TestHandlerUpsertsIntoExistingDataset:
         result = handler({}, object())
 
         assert result["statusCode"] == 200
-        assert result["latest_snapshot_date"] == "2026-08-23"
-        assert result["codes_processed"] == 2
-        assert result["codes_skipped"] == 1
-        assert result["row_count"] == 4
+        assert result["codes_processed"] == 3
+        assert result["codes_skipped"] == 0
+        assert result["row_count"] == 5
 
         rows = {(r["code"], r["Date"]): r["Close"] for r in _read_parquet_rows(s3)}
         assert rows == {
             ("13010", "2026-08-16"): 95,  # overwritten, not the stale existing 50
             ("13010", "2026-08-23"): 100,  # new
             ("72030", "2026-08-23"): 200,  # new
+            ("86970", "2026-08-09"): 490,  # 86970's own latest (2026-08-16 snapshot)
             ("99999", "2026-01-01"): 10,  # preserved, code absent from this run
         }
 
         metadata = _read_metadata(s3)
         assert metadata["commit_sha"] == "abc1234"
-        assert metadata["latest_snapshot_date"] == "2026-08-23"
-        assert metadata["row_count"] == 4
-        assert metadata["codes_processed"] == 2
-        assert metadata["codes_skipped"] == 1
+        assert metadata["row_count"] == 5
+        assert metadata["codes_processed"] == 3
+        assert metadata["codes_skipped"] == 0
         assert {f["name"] for f in metadata["features"]} == {"code", "Date", "Close"}
 
 
