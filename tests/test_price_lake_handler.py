@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +12,7 @@ from price_lake.service import FETCH_MAX_WORKERS
 
 
 class TestLoggingConfiguration:
-    def test_basic_config_is_forced(self) -> None:
+    def test_basic_config_is_forced_with_extra_fields_formatter(self) -> None:
         # The AWS base image's Runtime Interface Client attaches its own
         # handler to the root logger before this module is ever imported,
         # so basicConfig() silently no-ops without force=True -- every
@@ -22,9 +23,49 @@ class TestLoggingConfiguration:
         try:
             with patch("logging.basicConfig") as mock_basic_config:
                 importlib.reload(handler_module)
-            mock_basic_config.assert_called_once_with(level=logging.INFO, force=True)
+            _, kwargs = mock_basic_config.call_args
+            assert kwargs["level"] == logging.INFO
+            assert kwargs["force"] is True
+            (installed_handler,) = kwargs["handlers"]
+            assert isinstance(installed_handler.formatter, handler_module._ExtraFieldsFormatter)
         finally:
             importlib.reload(handler_module)  # restore real logging config
+
+
+class TestExtraFieldsFormatter:
+    def _record(self, **extra: object) -> logging.LogRecord:
+        record = logging.LogRecord(
+            name="price_lake.service",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="fetch progress",
+            args=(),
+            exc_info=None,
+        )
+        for key, value in extra.items():
+            setattr(record, key, value)
+        return record
+
+    def test_appends_extra_fields_as_json(self) -> None:
+        # extra= fields are stored on the LogRecord but the default
+        # Formatter never renders them -- this is the exact reason the
+        # checkpoint logging (codes_completed, memory_mb, ...) fired in
+        # production but showed up as bare "fetch progress" lines with no
+        # payload.
+        formatter = handler_module._ExtraFieldsFormatter("%(levelname)s:%(name)s:%(message)s")
+        record = self._record(codes_completed=500, memory_mb=812.3)
+        formatted = formatter.format(record)
+        assert formatted.startswith("INFO:price_lake.service:fetch progress | ")
+        assert json.loads(formatted.split(" | ", 1)[1]) == {
+            "codes_completed": 500,
+            "memory_mb": 812.3,
+        }
+
+    def test_no_suffix_when_no_extra_fields(self) -> None:
+        formatter = handler_module._ExtraFieldsFormatter("%(levelname)s:%(name)s:%(message)s")
+        record = self._record()
+        assert formatter.format(record) == "INFO:price_lake.service:fetch progress"
 
 
 class TestMakeDeps:
