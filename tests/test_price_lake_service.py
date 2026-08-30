@@ -67,10 +67,12 @@ class TestFetchLatestRows:
         source_store.get_json.side_effect = get_json
         service = PriceLakeService(_deps(source_store=source_store))
         rows, processed, skipped = service._fetch_latest_rows(["13010", "72030"])
-        assert rows == [
-            {"Date": "2026-08-23", "Close": 100, "code": "13010"},
-            {"Date": "2026-08-16", "Close": 190, "code": "72030"},
-        ]
+        # Fetches run concurrently, so completion (and therefore row) order
+        # isn't guaranteed -- compare as a set instead of a list.
+        assert {r["code"]: r for r in rows} == {
+            "13010": {"Date": "2026-08-23", "Close": 100, "code": "13010"},
+            "72030": {"Date": "2026-08-16", "Close": 190, "code": "72030"},
+        }
         assert processed == 2
         assert skipped == 0
 
@@ -99,10 +101,12 @@ class TestFetchLatestRows:
         assert processed == 1
         assert skipped == 0
 
-    def test_logs_codes_processed_so_far_before_reraising_on_failure(
+    def test_logs_codes_completed_so_far_before_reraising_on_failure(
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("price_lake.service.time.sleep", lambda _seconds: None)
+        # Pin concurrency to 1 so codes are fetched one at a time, making the
+        # "how many completed before the failure" count deterministic.
+        monkeypatch.setattr("price_lake.service.FETCH_MAX_WORKERS", 1)
         source_store = MagicMock()
         source_store.list_keys.return_value = ["daily-prices/x/2026-08-23.json"]
 
@@ -117,35 +121,46 @@ class TestFetchLatestRows:
         with caplog.at_level(logging.ERROR), pytest.raises(BotoConnectionError):
             service._fetch_latest_rows(["13010", "72030", "86970"])
 
-        assert "1/3" in caplog.records[-1].getMessage()
+        record = caplog.records[-1]
+        assert "72030" in record.getMessage()
+        assert record.__dict__["codes_completed"] == 1  # only 13010 finished first
+        assert record.__dict__["codes_total"] == 3
 
-
-class TestFetchCodeWithRetry:
-    def test_retries_transient_connection_error_then_succeeds(
+    def test_cancels_pending_fetches_once_a_code_fails(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("price_lake.service.time.sleep", lambda _seconds: None)
-        source_store = MagicMock()
-        source_store.list_keys.return_value = ["daily-prices/13010/2026-08-23.json"]
-        source_store.get_json.side_effect = [
-            BotoConnectionError(error=Exception("boom")),
-            [{"Date": "2026-08-23", "Close": 100}],
-        ]
-        service = PriceLakeService(_deps(source_store=source_store))
-        bars, latest_date = service._fetch_code_with_retry("13010")
-        assert bars == [{"Date": "2026-08-23", "Close": 100}]
-        assert latest_date == "2026-08-23"
-        assert source_store.get_json.call_count == 2
-
-    def test_raises_after_exhausting_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("price_lake.service.time.sleep", lambda _seconds: None)
+        # With concurrency pinned to 1, a failure on the first code must
+        # cancel the still-queued codes rather than fetch them anyway.
+        monkeypatch.setattr("price_lake.service.FETCH_MAX_WORKERS", 1)
         source_store = MagicMock()
         source_store.list_keys.return_value = ["daily-prices/13010/2026-08-23.json"]
         source_store.get_json.side_effect = BotoConnectionError(error=Exception("boom"))
         service = PriceLakeService(_deps(source_store=source_store))
         with pytest.raises(BotoConnectionError):
-            service._fetch_code_with_retry("13010")
-        assert source_store.get_json.call_count == 3
+            service._fetch_latest_rows(["13010", "72030", "86970"])
+        assert source_store.get_json.call_count == 1
+
+
+class TestFetchCode:
+    def test_returns_bars_and_latest_date(self) -> None:
+        source_store = MagicMock()
+        source_store.list_keys.return_value = ["daily-prices/13010/2026-08-23.json"]
+        source_store.get_json.return_value = [{"Date": "2026-08-23", "Close": 100}]
+        service = PriceLakeService(_deps(source_store=source_store))
+        bars, latest_date = service._fetch_code("13010")
+        assert bars == [{"Date": "2026-08-23", "Close": 100}]
+        assert latest_date == "2026-08-23"
+
+    def test_propagates_exception_without_retrying(self) -> None:
+        # Retries for transient S3 errors are handled by the boto3 client's
+        # Config(retries=...), not here -- a single failure must propagate.
+        source_store = MagicMock()
+        source_store.list_keys.return_value = ["daily-prices/13010/2026-08-23.json"]
+        source_store.get_json.side_effect = BotoConnectionError(error=Exception("boom"))
+        service = PriceLakeService(_deps(source_store=source_store))
+        with pytest.raises(BotoConnectionError):
+            service._fetch_code("13010")
+        assert source_store.get_json.call_count == 1
 
 
 class TestMergeUpsert:
