@@ -26,7 +26,6 @@ class PriceLakeDeps:
     dest_store: S3Store
     lake_prefix: str
     commit_sha: str
-    date_sample_size: int = 5
 
 
 class PriceLakeService:
@@ -35,16 +34,14 @@ class PriceLakeService:
 
     def run(self) -> dict[str, Any]:
         codes = self._list_all_codes()
-        snapshot_date = self._discover_latest_snapshot_date(codes)
-        rows, processed, skipped = self._fetch_latest_rows(codes, snapshot_date)
+        rows, processed, skipped = self._fetch_latest_rows(codes)
         existing = self._load_existing_table()
         table = self._merge_upsert(existing, rows)
-        metadata = self._build_metadata(table, snapshot_date, processed, skipped)
+        metadata = self._build_metadata(table, processed, skipped)
         self._write_dataset(table, metadata)
         logger.info(
             "price lake updated",
             extra={
-                "snapshot_date": snapshot_date,
                 "row_count": table.num_rows,
                 "codes_processed": processed,
                 "codes_skipped": skipped,
@@ -52,7 +49,6 @@ class PriceLakeService:
         )
         return {
             "statusCode": 200,
-            "latest_snapshot_date": snapshot_date,
             "row_count": table.num_rows,
             "codes_processed": processed,
             "codes_skipped": skipped,
@@ -62,38 +58,23 @@ class PriceLakeService:
         prefixes = self._deps.source_store.list_common_prefixes("daily-prices/")
         return [p.removeprefix("daily-prices/").rstrip("/") for p in prefixes]
 
-    def _discover_latest_snapshot_date(self, codes: list[str]) -> str:
-        if not codes:
-            raise ValueError("no stock codes found under daily-prices/")
-        sample = self._sample_codes(codes)
-        dates: list[str] = []
-        for code in sample:
-            keys = self._deps.source_store.list_keys(f"daily-prices/{code}/")
-            dates.extend(key.rsplit("/", 1)[-1].removesuffix(".json") for key in keys)
-        if not dates:
-            raise ValueError(f"no daily-prices snapshots found for sampled codes: {sample}")
+    def _latest_date(self, dates: list[str]) -> str:
         return max(dates)
 
-    def _sample_codes(self, codes: list[str]) -> list[str]:
-        # Evenly-spaced sample rather than the first N, so the sample isn't
-        # skewed toward codes that happen to be adjacent in sort order.
-        n = min(self._deps.date_sample_size, len(codes))
-        step = len(codes) / n
-        return [codes[int(i * step)] for i in range(n)]
-
-    def _fetch_latest_rows(
-        self, codes: list[str], snapshot_date: str
-    ) -> tuple[list[dict[str, Any]], int, int]:
+    def _fetch_latest_rows(self, codes: list[str]) -> tuple[list[dict[str, Any]], int, int]:
         rows: list[dict[str, Any]] = []
         processed = 0
         skipped = 0
         for code in codes:
-            bars = self._deps.source_store.get_json(make_daily_prices_key(code, snapshot_date))
+            keys = self._deps.source_store.list_keys(f"daily-prices/{code}/")
+            dates = [key.rsplit("/", 1)[-1].removesuffix(".json") for key in keys]
+            latest_date = self._latest_date(dates)
+            bars = self._deps.source_store.get_json(make_daily_prices_key(code, latest_date))
             if bars is None:
                 skipped += 1
                 logger.warning(
                     "no snapshot for code at latest date",
-                    extra={"code": code, "snapshot_date": snapshot_date},
+                    extra={"code": code, "date": latest_date},
                 )
                 continue
             for bar in bars:
@@ -125,14 +106,11 @@ class PriceLakeService:
         combined = sorted(merged.values(), key=lambda r: (r["code"], r["Date"]))
         return pa.Table.from_pylist(combined)
 
-    def _build_metadata(
-        self, table: pa.Table, snapshot_date: str, processed: int, skipped: int
-    ) -> dict[str, Any]:
+    def _build_metadata(self, table: pa.Table, processed: int, skipped: int) -> dict[str, Any]:
         return {
             "schema_version": "v1",
             "created_at": now_jst_iso(),
             "commit_sha": self._deps.commit_sha,
-            "latest_snapshot_date": snapshot_date,
             "row_count": table.num_rows,
             "codes_processed": processed,
             "codes_skipped": skipped,
