@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import resource
 import shutil
 import tempfile
@@ -51,6 +52,21 @@ def _peak_memory_mb() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 
+def _arrow_pool_stats() -> dict[str, Any]:
+    # MALLOC_ARENA_MAX only tunes glibc's own allocator (ptmalloc) -- it has
+    # no effect on Arrow buffer allocations if pyarrow's wheel is using a
+    # bundled allocator (mimalloc/jemalloc) for its default memory pool
+    # instead. Logging backend_name + bytes_allocated alongside the overall
+    # process RSS (_peak_memory_mb) lets a single production invoke show
+    # whether Arrow-side allocations track the RSS growth or not.
+    pool = pa.default_memory_pool()
+    return {
+        "arrow_pool_backend": pool.backend_name,
+        "arrow_bytes_allocated_mb": round(pool.bytes_allocated() / (1024 * 1024), 1),
+        "arrow_max_memory_mb": round(pool.max_memory() / (1024 * 1024), 1),
+    }
+
+
 def _composite_key(table: pa.Table) -> pa.Array:
     # (code, Date) uniquely identifies a row. Joining it into one string
     # column lets pyarrow.compute.is_in do a single vectorized anti-join in
@@ -80,6 +96,13 @@ class PriceLakeService:
     def run(self) -> dict[str, Any]:
         start = time.monotonic()
         spill_dir = Path(tempfile.mkdtemp(prefix=_SPILL_DIR_PREFIX))
+        logger.info(
+            "runtime diagnostics",
+            extra={
+                "malloc_arena_max_env": os.environ.get("MALLOC_ARENA_MAX"),
+                **_arrow_pool_stats(),
+            },
+        )
         try:
             codes = self._list_all_codes()
             logger.info(
@@ -228,6 +251,7 @@ class PriceLakeService:
                             "elapsed_seconds": round(elapsed, 1),
                             "codes_per_second": round(completed / elapsed, 2) if elapsed else None,
                             "memory_mb": round(_peak_memory_mb(), 1),
+                            **_arrow_pool_stats(),
                         },
                     )
             flush()
