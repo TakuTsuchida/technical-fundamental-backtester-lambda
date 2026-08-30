@@ -5,6 +5,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from botocore.exceptions import ConnectionError as BotoConnectionError
 
@@ -140,6 +141,21 @@ class TestFetchLatestRows:
             service._fetch_latest_rows(["13010", "72030", "86970"])
         assert source_store.get_json.call_count == 1
 
+    def test_logs_progress_at_interval(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("price_lake.service._PROGRESS_LOG_INTERVAL", 2)
+        source_store = MagicMock()
+        source_store.list_keys.return_value = ["daily-prices/x/2026-08-23.json"]
+        source_store.get_json.return_value = [{"Date": "2026-08-23", "Close": 100}]
+        service = PriceLakeService(_deps(source_store=source_store))
+
+        with caplog.at_level(logging.INFO):
+            service._fetch_latest_rows(["13010", "72030", "86970", "99999"])
+
+        progress_records = [r for r in caplog.records if r.getMessage() == "fetch progress"]
+        assert [r.__dict__["codes_completed"] for r in progress_records] == [2, 4]
+
 
 class TestFetchCode:
     def test_returns_bars_and_latest_date(self) -> None:
@@ -196,6 +212,56 @@ class TestMergeUpsert:
         ]
         table = PriceLakeService(_deps())._merge_upsert(None, new_rows)
         assert [r["code"] for r in table.to_pylist()] == ["13010", "72030"]
+
+    def test_logs_progress_at_interval_for_existing_and_new_rows(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("price_lake.service._PROGRESS_LOG_INTERVAL", 2)
+        existing = pa.Table.from_pylist(
+            [{"code": f"e{i}", "Date": "2026-08-16", "Close": i} for i in range(4)]
+        )
+        new_rows = [{"code": f"n{i}", "Date": "2026-08-23", "Close": i} for i in range(4)]
+
+        with caplog.at_level(logging.INFO):
+            PriceLakeService(_deps())._merge_upsert(existing, new_rows)
+
+        existing_progress = [
+            r for r in caplog.records if r.getMessage() == "merge progress (existing rows)"
+        ]
+        new_progress = [r for r in caplog.records if r.getMessage() == "merge progress (new rows)"]
+        assert [r.__dict__["existing_rows_merged"] for r in existing_progress] == [2, 4]
+        assert [r.__dict__["new_rows_merged"] for r in new_progress] == [2, 4]
+
+
+class TestLoadExistingTable:
+    def test_logs_when_no_existing_dataset(self, caplog: pytest.LogCaptureFixture) -> None:
+        dest_store = MagicMock()
+        dest_store.get_object_bytes.return_value = None
+        service = PriceLakeService(_deps(dest_store=dest_store))
+
+        with caplog.at_level(logging.INFO):
+            result = service._load_existing_table()
+
+        assert result is None
+        assert any(r.getMessage() == "no existing dataset found" for r in caplog.records)
+
+    def test_logs_row_count_when_existing_dataset_found(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        table = pa.Table.from_pylist([{"code": "13010", "Date": "2026-08-23", "Close": 100}])
+        buf = pa.BufferOutputStream()
+        pq.write_table(table, buf)  # type: ignore[no-untyped-call]
+        dest_store = MagicMock()
+        dest_store.get_object_bytes.return_value = buf.getvalue().to_pybytes()
+        service = PriceLakeService(_deps(dest_store=dest_store))
+
+        with caplog.at_level(logging.INFO):
+            result = service._load_existing_table()
+
+        assert result is not None
+        assert result.num_rows == 1
+        record = next(r for r in caplog.records if r.getMessage() == "existing dataset loaded")
+        assert record.__dict__["existing_row_count"] == 1
 
 
 class TestBuildMetadata:
