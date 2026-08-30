@@ -1,11 +1,30 @@
 from __future__ import annotations
 
+import importlib
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from price_lake import handler as handler_module
 from price_lake.service import FETCH_MAX_WORKERS
+
+
+class TestLoggingConfiguration:
+    def test_basic_config_is_forced(self) -> None:
+        # The AWS base image's Runtime Interface Client attaches its own
+        # handler to the root logger before this module is ever imported,
+        # so basicConfig() silently no-ops without force=True -- every
+        # logger.info() call in the service (including the checkpoint
+        # logging this function exists to enable) would then be dropped
+        # before reaching CloudWatch. Confirmed in production: WARNING/ERROR
+        # logs came through fine, but zero INFO lines ever appeared.
+        try:
+            with patch("logging.basicConfig") as mock_basic_config:
+                importlib.reload(handler_module)
+            mock_basic_config.assert_called_once_with(level=logging.INFO, force=True)
+        finally:
+            importlib.reload(handler_module)  # restore real logging config
 
 
 class TestMakeDeps:
