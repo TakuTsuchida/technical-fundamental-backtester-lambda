@@ -7,6 +7,7 @@ on:
     paths:
       - "src/worker/**"
       - "src/shared/**"
+      - "Dockerfile"
       - "Makefile"
   workflow_dispatch: # OIDC verification — remove after confirmed
 
