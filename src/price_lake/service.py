@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-import io
 import logging
 import resource
+import shutil
+import tempfile
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from shared.s3_store import (
     S3Store,
@@ -22,20 +25,23 @@ logger = logging.getLogger(__name__)
 
 # Retries for transient S3 errors (connection resets, read timeouts,
 # throttling) are handled entirely by the boto3 client's Config(retries=...)
-# (see handler.py) -- not here. That config is set at the HTTP layer, which
-# is where botocore.exceptions.ReadTimeoutError (not a ConnectionError
-# subclass) also gets caught; an app-level retry limited to ConnectionError
-# would miss it. FETCH_MAX_WORKERS is public (no leading underscore) because
-# handler.py imports it to size the client's connection pool accordingly.
+# (see handler.py) -- not here. FETCH_MAX_WORKERS is public (no leading
+# underscore) because handler.py imports it to size the client's connection
+# pool accordingly.
 FETCH_MAX_WORKERS = 20
 
 # How often (in rows) to emit a progress checkpoint while fetching or
-# merging. A production run timed out after PR #52's fix removed the
-# SSLErrors that used to crash it early, with zero errors logged and
-# Max Memory Used pinned at the 1024MB ceiling -- but there was no
-# checkpoint logging to show whether that was a slow fetch, a memory
-# blowup while merging, or both. These checkpoints exist to answer that.
+# merging.
 _PROGRESS_LOG_INTERVAL = 500
+
+# Batch size for spilling fetched rows to /tmp as Parquet instead of
+# accumulating them all in one Python list. Derived from production
+# checkpoint logs: ~1.44KB of Python dict overhead per row, so 100,000 rows
+# caps that buffer's peak around 150-300MB regardless of how many stock
+# codes the run covers -- a full 4505-code run previously grew unbounded to
+# an extrapolated ~2.9GB and OOM'd before even reaching the merge phase.
+_SPILL_BATCH_ROWS = 100_000
+_SPILL_DIR_PREFIX = "price_lake_spill_"
 
 
 def _peak_memory_mb() -> float:
@@ -43,6 +49,18 @@ def _peak_memory_mb() -> float:
     # snapshot, not current usage, but that's exactly what matters for
     # spotting an approaching OOM.
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+
+
+def _composite_key(table: pa.Table) -> pa.Array:
+    # (code, Date) uniquely identifies a row. Joining it into one string
+    # column lets pyarrow.compute.is_in do a single vectorized anti-join in
+    # _merge_upsert instead of building a Python dict[(code,date) -> dict]
+    # for every row in both the existing and new datasets.
+    return pc.binary_join_element_wise(  # type: ignore[attr-defined]
+        pc.cast(table["code"], pa.string()),  # type: ignore[no-untyped-call]
+        pc.cast(table["Date"], pa.string()),  # type: ignore[no-untyped-call]
+        "\x1f",
+    )
 
 
 @dataclass
@@ -61,53 +79,61 @@ class PriceLakeService:
 
     def run(self) -> dict[str, Any]:
         start = time.monotonic()
-        codes = self._list_all_codes()
-        logger.info(
-            "codes discovered",
-            extra={
-                "codes_total": len(codes),
-                "elapsed_seconds": round(time.monotonic() - start, 1),
-            },
-        )
-        rows, processed, skipped = self._fetch_latest_rows(codes)
-        logger.info(
-            "fetch phase complete",
-            extra={
-                "row_count": len(rows),
+        spill_dir = Path(tempfile.mkdtemp(prefix=_SPILL_DIR_PREFIX))
+        try:
+            codes = self._list_all_codes()
+            logger.info(
+                "codes discovered",
+                extra={
+                    "codes_total": len(codes),
+                    "elapsed_seconds": round(time.monotonic() - start, 1),
+                },
+            )
+            spill_files, processed, skipped, row_count = self._fetch_latest_rows(codes, spill_dir)
+            logger.info(
+                "fetch phase complete",
+                extra={
+                    "row_count": row_count,
+                    "codes_processed": processed,
+                    "codes_skipped": skipped,
+                    "elapsed_seconds": round(time.monotonic() - start, 1),
+                    "memory_mb": round(_peak_memory_mb(), 1),
+                },
+            )
+            existing = self._load_existing_table(spill_dir)
+            table = self._merge_upsert(existing, spill_files)
+            logger.info(
+                "merge phase complete",
+                extra={
+                    "row_count": table.num_rows,
+                    "elapsed_seconds": round(time.monotonic() - start, 1),
+                    "memory_mb": round(_peak_memory_mb(), 1),
+                },
+            )
+            metadata = self._build_metadata(table, processed, skipped)
+            self._write_dataset(table, metadata, spill_dir)
+            logger.info(
+                "price lake updated",
+                extra={
+                    "row_count": table.num_rows,
+                    "codes_processed": processed,
+                    "codes_skipped": skipped,
+                    "elapsed_seconds": round(time.monotonic() - start, 1),
+                    "memory_mb": round(_peak_memory_mb(), 1),
+                },
+            )
+            return {
+                "statusCode": 200,
+                "row_count": table.num_rows,
                 "codes_processed": processed,
                 "codes_skipped": skipped,
-                "elapsed_seconds": round(time.monotonic() - start, 1),
-                "memory_mb": round(_peak_memory_mb(), 1),
-            },
-        )
-        existing = self._load_existing_table()
-        table = self._merge_upsert(existing, rows)
-        logger.info(
-            "merge phase complete",
-            extra={
-                "row_count": table.num_rows,
-                "elapsed_seconds": round(time.monotonic() - start, 1),
-                "memory_mb": round(_peak_memory_mb(), 1),
-            },
-        )
-        metadata = self._build_metadata(table, processed, skipped)
-        self._write_dataset(table, metadata)
-        logger.info(
-            "price lake updated",
-            extra={
-                "row_count": table.num_rows,
-                "codes_processed": processed,
-                "codes_skipped": skipped,
-                "elapsed_seconds": round(time.monotonic() - start, 1),
-                "memory_mb": round(_peak_memory_mb(), 1),
-            },
-        )
-        return {
-            "statusCode": 200,
-            "row_count": table.num_rows,
-            "codes_processed": processed,
-            "codes_skipped": skipped,
-        }
+            }
+        finally:
+            # Runs on both success and the re-raised fetch failure below --
+            # a run must never leave spilled data behind, and since each
+            # invocation gets a uniquely-named dir, a stray leftover from an
+            # ungraceful kill can't corrupt a later run's data either.
+            shutil.rmtree(spill_dir, ignore_errors=True)
 
     def _list_all_codes(self) -> list[str]:
         prefixes = self._deps.source_store.list_common_prefixes("daily-prices/")
@@ -116,17 +142,34 @@ class PriceLakeService:
     def _latest_date(self, dates: list[str]) -> str:
         return max(dates)
 
-    def _fetch_latest_rows(self, codes: list[str]) -> tuple[list[dict[str, Any]], int, int]:
-        rows: list[dict[str, Any]] = []
+    def _fetch_latest_rows(
+        self, codes: list[str], spill_dir: Path
+    ) -> tuple[list[Path], int, int, int]:
+        buffer: list[dict[str, Any]] = []
+        spill_files: list[Path] = []
         processed = 0
         skipped = 0
         completed = 0
+        total_rows = 0
+        batch_index = 0
         total = len(codes)
         fetch_start = time.monotonic()
 
-        # rows/processed/skipped/completed are only ever mutated from this
-        # method (the as_completed loop runs on the main thread) -- worker
-        # threads just return a result or raise, so no lock is needed.
+        def flush() -> None:
+            nonlocal buffer, batch_index
+            if not buffer:
+                return
+            batch_table = pa.Table.from_pylist(buffer)
+            path = spill_dir / f"new_batch_{batch_index:05d}.parquet"
+            pq.write_table(batch_table, path)  # type: ignore[no-untyped-call]
+            spill_files.append(path)
+            batch_index += 1
+            buffer = []
+
+        # buffer/spill_files/processed/skipped/completed/total_rows are only
+        # ever mutated from this method (the as_completed loop runs on the
+        # main thread) -- worker threads just return a result or raise, so
+        # no lock is needed.
         with ThreadPoolExecutor(max_workers=FETCH_MAX_WORKERS) as executor:
             future_to_code: dict[Future[tuple[list[dict[str, Any]] | None, str]], str] = {
                 executor.submit(self._fetch_code, code): code for code in codes
@@ -139,7 +182,10 @@ class PriceLakeService:
                     # Cancel whatever hasn't started yet and wait for
                     # already-running fetches to finish before re-raising --
                     # run() never writes a partial dataset either way, but
-                    # this keeps the executor's shutdown clean.
+                    # this keeps the executor's shutdown clean. Whatever is
+                    # still in `buffer` at this point is simply dropped,
+                    # since run()'s finally block deletes spill_dir on any
+                    # exit path.
                     executor.shutdown(wait=True, cancel_futures=True)
                     logger.error(
                         "aborting price lake run after fetch failure for code %s -- "
@@ -161,10 +207,16 @@ class PriceLakeService:
                     )
                     continue
                 for bar in bars:
+                    if "Date" not in bar:
+                        logger.warning("skipping row without Date field", extra={"code": code})
+                        continue
                     row = dict(bar)
                     row["code"] = code
-                    rows.append(row)
+                    buffer.append(row)
+                    total_rows += 1
                 processed += 1
+                if len(buffer) >= _SPILL_BATCH_ROWS:
+                    flush()
                 if completed % _PROGRESS_LOG_INTERVAL == 0:
                     elapsed = time.monotonic() - fetch_start
                     logger.info(
@@ -172,13 +224,14 @@ class PriceLakeService:
                         extra={
                             "codes_completed": completed,
                             "codes_total": total,
-                            "row_count": len(rows),
+                            "row_count": total_rows,
                             "elapsed_seconds": round(elapsed, 1),
                             "codes_per_second": round(completed / elapsed, 2) if elapsed else None,
                             "memory_mb": round(_peak_memory_mb(), 1),
                         },
                     )
-        return rows, processed, skipped
+            flush()
+        return spill_files, processed, skipped, total_rows
 
     def _fetch_code(self, code: str) -> tuple[list[dict[str, Any]] | None, str]:
         keys = self._deps.source_store.list_keys(f"daily-prices/{code}/")
@@ -187,78 +240,82 @@ class PriceLakeService:
         bars = self._deps.source_store.get_json(make_daily_prices_key(code, latest_date))
         return bars, latest_date
 
-    def _load_existing_table(self) -> pa.Table | None:
+    def _load_existing_table(self, spill_dir: Path) -> pa.Table | None:
         blob = self._deps.dest_store.get_object_bytes(lake_data_key(self._deps.lake_prefix))
         if blob is None:
             logger.info(
                 "no existing dataset found", extra={"memory_mb": round(_peak_memory_mb(), 1)}
             )
             return None
-        table = pq.read_table(io.BytesIO(blob))  # type: ignore[no-untyped-call]
+        # Persist to disk immediately and drop the Python bytes object so the
+        # raw blob and the parsed Table are never both resident at once;
+        # memory_map avoids a second full in-heap copy while reading it back.
+        path = spill_dir / "existing.parquet"
+        path.write_bytes(blob)
+        blob_bytes = len(blob)
+        del blob
+        table = pq.read_table(path, memory_map=True)  # type: ignore[no-untyped-call]
         logger.info(
             "existing dataset loaded",
             extra={
                 "existing_row_count": table.num_rows,
-                "existing_blob_bytes": len(blob),
+                "existing_blob_bytes": blob_bytes,
                 "memory_mb": round(_peak_memory_mb(), 1),
             },
         )
         return table
 
-    def _merge_upsert(self, existing: pa.Table | None, new_rows: list[dict[str, Any]]) -> pa.Table:
-        # Merge as plain dicts, then build the Arrow table once at the end --
-        # this avoids reconciling two independently-inferred Arrow schemas
-        # when the JSON's key set drifts between snapshots.
+    def _merge_upsert(self, existing: pa.Table | None, spill_files: list[Path]) -> pa.Table:
+        # Arrow-native anti-join upsert: a new row always wins over an
+        # existing row sharing the same (code, Date) key. This replaces the
+        # old to_pylist() + dict[(code,date) -> dict] merge, which held both
+        # the entire existing dataset and every new row as individual Python
+        # dict objects at once -- Arrow's columnar layout has none of that
+        # per-row object overhead.
         merge_start = time.monotonic()
-        merged: dict[tuple[str, str], dict[str, Any]] = {}
-        if existing is not None:
-            existing_rows = existing.to_pylist()
-            for i, row in enumerate(existing_rows, start=1):
-                merged[(row["code"], row["Date"])] = row
-                if i % _PROGRESS_LOG_INTERVAL == 0:
-                    logger.info(
-                        "merge progress (existing rows)",
-                        extra={
-                            "existing_rows_merged": i,
-                            "existing_rows_total": len(existing_rows),
-                            "elapsed_seconds": round(time.monotonic() - merge_start, 1),
-                            "memory_mb": round(_peak_memory_mb(), 1),
-                        },
-                    )
-        for i, row in enumerate(new_rows, start=1):
-            if "Date" not in row:
-                logger.warning("skipping row without Date field", extra={"code": row.get("code")})
-                continue
-            merged[(row["code"], row["Date"])] = row
-            if i % _PROGRESS_LOG_INTERVAL == 0:
-                logger.info(
-                    "merge progress (new rows)",
-                    extra={
-                        "new_rows_merged": i,
-                        "new_rows_total": len(new_rows),
-                        "elapsed_seconds": round(time.monotonic() - merge_start, 1),
-                        "memory_mb": round(_peak_memory_mb(), 1),
-                    },
-                )
-        combined = sorted(merged.values(), key=lambda r: (r["code"], r["Date"]))
+        new_table = (
+            pa.concat_tables(
+                [pq.read_table(p) for p in spill_files],  # type: ignore[no-untyped-call]
+                promote_options="permissive",
+            )
+            if spill_files
+            else None
+        )
         logger.info(
-            "dict merge complete, building Arrow table",
+            "new rows loaded from spill files",
             extra={
-                "merged_row_count": len(combined),
+                "spill_file_count": len(spill_files),
+                "new_row_count": new_table.num_rows if new_table is not None else 0,
                 "elapsed_seconds": round(time.monotonic() - merge_start, 1),
                 "memory_mb": round(_peak_memory_mb(), 1),
             },
         )
-        table = pa.Table.from_pylist(combined)
+        if existing is None:
+            merged = new_table if new_table is not None else pa.Table.from_pylist([])
+        elif new_table is None:
+            merged = existing
+        else:
+            # promote_options="permissive" handles schema drift between the
+            # existing dataset and this run's new rows (missing columns get
+            # null-filled) -- the practical equivalent of the old dict
+            # merge's implicit "whatever keys each row happened to have".
+            superseded = pc.is_in(  # type: ignore[attr-defined]
+                _composite_key(existing), value_set=_composite_key(new_table)
+            )
+            merged = pa.concat_tables(
+                [existing.filter(pc.invert(superseded)), new_table],  # type: ignore[attr-defined]
+                promote_options="permissive",
+            )
+        combined = merged.sort_by([("code", "ascending"), ("Date", "ascending")])
         logger.info(
-            "Arrow table built",
+            "merge complete",
             extra={
-                "row_count": table.num_rows,
+                "row_count": combined.num_rows,
                 "elapsed_seconds": round(time.monotonic() - merge_start, 1),
                 "memory_mb": round(_peak_memory_mb(), 1),
             },
         )
-        return table
+        return combined
 
     def _build_metadata(self, table: pa.Table, processed: int, skipped: int) -> dict[str, Any]:
         return {
@@ -271,12 +328,17 @@ class PriceLakeService:
             "features": [{"name": f.name, "dtype": str(f.type)} for f in table.schema],
         }
 
-    def _write_dataset(self, table: pa.Table, metadata: dict[str, Any]) -> None:
-        buf = pa.BufferOutputStream()
-        pq.write_table(table, buf)  # type: ignore[no-untyped-call]
+    def _write_dataset(self, table: pa.Table, metadata: dict[str, Any], spill_dir: Path) -> None:
+        # Encode through a /tmp file rather than pa.BufferOutputStream, which
+        # kept the whole encoded blob resident twice over (getvalue() then
+        # to_pybytes()). put_object_bytes still needs one final bytes object
+        # -- S3Store has no multipart upload API -- so that floor remains,
+        # but this avoids the redundant in-process copies on top of it.
+        path = spill_dir / "output.parquet"
+        pq.write_table(table, path)  # type: ignore[no-untyped-call]
         self._deps.dest_store.put_object_bytes(
             lake_data_key(self._deps.lake_prefix),
-            buf.getvalue().to_pybytes(),
+            path.read_bytes(),
             "application/octet-stream",
         )
         self._deps.dest_store.put_json(lake_metadata_key(self._deps.lake_prefix), metadata)
