@@ -39,11 +39,11 @@ build-fins-dispatcher:
 
 build-worker:
 	@test -n "$(IMAGE_TAG)" || (echo "ERROR: IMAGE_TAG is empty" >&2; exit 1)
-	docker build -f src/worker/Dockerfile -t $(ECR_REPO):$(IMAGE_TAG) -t $(ECR_REPO):latest .
+	docker build --target worker -t $(ECR_REPO):$(IMAGE_TAG) -t $(ECR_REPO):latest .
 
 build-price-lake:
 	@test -n "$(IMAGE_TAG)" || (echo "ERROR: IMAGE_TAG is empty" >&2; exit 1)
-	docker build -f src/price_lake/Dockerfile \
+	docker build --target price_lake \
 		--build-arg GIT_COMMIT_SHA=$(IMAGE_TAG) \
 		-t $(ECR_REPO_PRICE_LAKE):$(IMAGE_TAG) -t $(ECR_REPO_PRICE_LAKE):latest .
 
