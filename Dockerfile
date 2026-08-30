@@ -38,6 +38,17 @@ FROM public.ecr.aws/lambda/python:3.12 AS price_lake
 ARG GIT_COMMIT_SHA
 ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
 
+# _fetch_latest_rows runs 20 concurrent worker threads that repeatedly
+# json.loads() large payloads. glibc's default per-thread malloc arenas
+# fragment under that churn and never return freed memory to the OS, so
+# peak RSS climbs for the entire run even though the /tmp-spill batching
+# already bounds how much data is ever live in Python objects at once
+# (confirmed via a local repro on this same base image: with the default
+# arena behavior peak RSS kept climbing for all 4505 simulated codes;
+# with MALLOC_ARENA_MAX=1 it plateaued after ~2000). Forcing a single
+# arena removes the fragmentation instead of just shrinking it.
+ENV MALLOC_ARENA_MAX=1
+
 RUN dnf install -y shadow-utils && \
     /usr/sbin/useradd --no-create-home --shell /sbin/nologin lambda-user && \
     dnf clean all
