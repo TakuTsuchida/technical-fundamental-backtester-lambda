@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from botocore.exceptions import ConnectionError as BotoConnectionError
 from shared.s3_store import (
     S3Store,
     lake_data_key,
@@ -16,6 +18,12 @@ from shared.s3_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+# A long sequential run occasionally hits a stale pooled HTTPS connection
+# (SSLError: UNEXPECTED_EOF_WHILE_READING) partway through; a fresh attempt
+# almost always succeeds, so retry a few times before giving up on a code.
+_FETCH_MAX_ATTEMPTS = 3
+_FETCH_RETRY_BACKOFF_SECONDS = 1.0
 
 
 @dataclass
@@ -66,10 +74,17 @@ class PriceLakeService:
         processed = 0
         skipped = 0
         for code in codes:
-            keys = self._deps.source_store.list_keys(f"daily-prices/{code}/")
-            dates = [key.rsplit("/", 1)[-1].removesuffix(".json") for key in keys]
-            latest_date = self._latest_date(dates)
-            bars = self._deps.source_store.get_json(make_daily_prices_key(code, latest_date))
+            try:
+                bars, latest_date = self._fetch_code_with_retry(code)
+            except Exception:
+                logger.error(
+                    "aborting price lake run after fetch failure -- "
+                    "%d/%d codes processed before this point",
+                    processed,
+                    len(codes),
+                    extra={"code": code, "codes_processed": processed, "codes_total": len(codes)},
+                )
+                raise
             if bars is None:
                 skipped += 1
                 logger.warning(
@@ -83,6 +98,26 @@ class PriceLakeService:
                 rows.append(row)
             processed += 1
         return rows, processed, skipped
+
+    def _fetch_code_with_retry(self, code: str) -> tuple[list[dict[str, Any]] | None, str]:
+        for attempt in range(1, _FETCH_MAX_ATTEMPTS + 1):
+            try:
+                keys = self._deps.source_store.list_keys(f"daily-prices/{code}/")
+                dates = [key.rsplit("/", 1)[-1].removesuffix(".json") for key in keys]
+                latest_date = self._latest_date(dates)
+                bars = self._deps.source_store.get_json(make_daily_prices_key(code, latest_date))
+                return bars, latest_date
+            except BotoConnectionError:
+                if attempt == _FETCH_MAX_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "retrying code after transient S3 connection error (attempt %d/%d)",
+                    attempt,
+                    _FETCH_MAX_ATTEMPTS,
+                    extra={"code": code},
+                )
+                time.sleep(_FETCH_RETRY_BACKOFF_SECONDS * attempt)
+        raise AssertionError("unreachable")  # loop always returns or raises
 
     def _load_existing_table(self) -> pa.Table | None:
         blob = self._deps.dest_store.get_object_bytes(lake_data_key(self._deps.lake_prefix))

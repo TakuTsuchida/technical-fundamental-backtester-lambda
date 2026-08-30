@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
 import pyarrow as pa
+import pytest
+from botocore.exceptions import ConnectionError as BotoConnectionError
 
 from price_lake.service import PriceLakeDeps, PriceLakeService
 
@@ -95,6 +98,54 @@ class TestFetchLatestRows:
         assert [r["code"] for r in rows] == ["13010", "13010"]
         assert processed == 1
         assert skipped == 0
+
+    def test_logs_codes_processed_so_far_before_reraising_on_failure(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("price_lake.service.time.sleep", lambda _seconds: None)
+        source_store = MagicMock()
+        source_store.list_keys.return_value = ["daily-prices/x/2026-08-23.json"]
+
+        def get_json(key: str) -> list[dict[str, Any]] | None:
+            if key == "daily-prices/72030/2026-08-23.json":
+                raise BotoConnectionError(error=Exception("boom"))
+            return [{"Date": "2026-08-23", "Close": 100}]
+
+        source_store.get_json.side_effect = get_json
+        service = PriceLakeService(_deps(source_store=source_store))
+
+        with caplog.at_level(logging.ERROR), pytest.raises(BotoConnectionError):
+            service._fetch_latest_rows(["13010", "72030", "86970"])
+
+        assert "1/3" in caplog.records[-1].getMessage()
+
+
+class TestFetchCodeWithRetry:
+    def test_retries_transient_connection_error_then_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("price_lake.service.time.sleep", lambda _seconds: None)
+        source_store = MagicMock()
+        source_store.list_keys.return_value = ["daily-prices/13010/2026-08-23.json"]
+        source_store.get_json.side_effect = [
+            BotoConnectionError(error=Exception("boom")),
+            [{"Date": "2026-08-23", "Close": 100}],
+        ]
+        service = PriceLakeService(_deps(source_store=source_store))
+        bars, latest_date = service._fetch_code_with_retry("13010")
+        assert bars == [{"Date": "2026-08-23", "Close": 100}]
+        assert latest_date == "2026-08-23"
+        assert source_store.get_json.call_count == 2
+
+    def test_raises_after_exhausting_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("price_lake.service.time.sleep", lambda _seconds: None)
+        source_store = MagicMock()
+        source_store.list_keys.return_value = ["daily-prices/13010/2026-08-23.json"]
+        source_store.get_json.side_effect = BotoConnectionError(error=Exception("boom"))
+        service = PriceLakeService(_deps(source_store=source_store))
+        with pytest.raises(BotoConnectionError):
+            service._fetch_code_with_retry("13010")
+        assert source_store.get_json.call_count == 3
 
 
 class TestMergeUpsert:
