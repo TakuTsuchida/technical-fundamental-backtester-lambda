@@ -212,6 +212,26 @@ class TestFetchLatestRows:
         progress_records = [r for r in caplog.records if r.getMessage() == "fetch progress"]
         assert [r.__dict__["codes_completed"] for r in progress_records] == [2, 4]
 
+    def test_progress_log_includes_arrow_pool_stats(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Diagnostic for issue #63: MALLOC_ARENA_MAX only tunes glibc's own
+        # allocator, not whatever backend pyarrow's memory pool actually
+        # uses -- this lets a single production invoke show whether Arrow
+        # allocations track the overall process RSS growth or not.
+        monkeypatch.setattr("price_lake.service._PROGRESS_LOG_INTERVAL", 1)
+        source_store = MagicMock()
+        source_store.list_keys.return_value = ["daily-prices/x/2026-08-23.json"]
+        source_store.get_json.return_value = [{"Date": "2026-08-23", "Close": 100}]
+        service = PriceLakeService(_deps(source_store=source_store))
+
+        with caplog.at_level(logging.INFO):
+            service._fetch_latest_rows(["13010"], tmp_path)
+
+        record = next(r for r in caplog.records if r.getMessage() == "fetch progress")
+        assert isinstance(record.__dict__["arrow_pool_backend"], str)
+        assert isinstance(record.__dict__["arrow_bytes_allocated_mb"], float)
+
 
 class TestFetchCode:
     def test_returns_bars_and_latest_date(self) -> None:
@@ -377,6 +397,28 @@ class TestBuildMetadata:
 
 
 class TestRun:
+    def test_logs_runtime_diagnostics(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Diagnostic for issue #63: surfaces the actual MALLOC_ARENA_MAX
+        # value seen by the running process and pyarrow's memory pool
+        # backend, to confirm what the fetch-phase memory growth is (and
+        # isn't) attributable to.
+        monkeypatch.setenv("MALLOC_ARENA_MAX", "1")
+        source_store = MagicMock()
+        source_store.list_common_prefixes.return_value = ["daily-prices/13010/"]
+        source_store.list_keys.return_value = ["daily-prices/13010/2026-08-23.json"]
+        source_store.get_json.return_value = [{"Date": "2026-08-23", "Close": 100}]
+        dest_store = MagicMock()
+        dest_store.get_object_bytes.return_value = None
+
+        with caplog.at_level(logging.INFO):
+            PriceLakeService(_deps(source_store=source_store, dest_store=dest_store)).run()
+
+        record = next(r for r in caplog.records if r.getMessage() == "runtime diagnostics")
+        assert record.__dict__["malloc_arena_max_env"] == "1"
+        assert isinstance(record.__dict__["arrow_pool_backend"], str)
+
     def test_orchestrates_full_pipeline(self) -> None:
         source_store = MagicMock()
         source_store.list_common_prefixes.return_value = ["daily-prices/13010/"]
