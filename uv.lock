@@ -964,6 +964,9 @@ dispatcher = [
 fins-dispatcher = [
     { name = "requests" },
 ]
+price-lake = [
+    { name = "pyarrow" },
+]
 worker = [
     { name = "pyarrow" },
     { name = "requests" },
@@ -983,6 +986,7 @@ dev = [
 ]
 dispatcher = [{ name = "requests", specifier = ">=2.32" }]
 fins-dispatcher = [{ name = "requests", specifier = ">=2.32" }]
+price-lake = [{ name = "pyarrow", specifier = ">=16.0" }]
 worker = [
     { name = "pyarrow", specifier = ">=16.0" },
     { name = "requests", specifier = ">=2.32" },

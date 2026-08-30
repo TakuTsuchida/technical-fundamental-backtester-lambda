@@ -25,6 +25,9 @@ worker          = [
 fins_dispatcher = [
     "requests>=2.32",
 ]
+price_lake = [
+    "pyarrow>=16.0",
+]
 
 [tool.ruff]
 target-version = "py312"
